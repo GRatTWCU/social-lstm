@@ -626,39 +626,39 @@ class DataLoader():
         # return the number of dataset in the mode
         return len(self.data)
 
-    def clean_test_data(self, x_seq, target_id, obs_lenght, predicted_lenght):
-        """
-        remove (pedid, x , y) array if x or y is nan for each frame in observed part (for test mode)
-        """
-        # target_idが配列の場合は最初の要素を取得
+    def clean_test_data(self, x_seq, target_id, obs_length, predicted_length):
+        """remove (pedid, x , y) array if x or y is nan for each frame in observed part"""
+        
+        # target_idの型変換を強化
         if isinstance(target_id, (list, np.ndarray)):
             target_id = target_id[0] if len(target_id) > 0 else 0
-        elif hasattr(target_id, 'item'):  # numpy scalar の場合
+        elif hasattr(target_id, 'item'):
+            target_id = target_id.item()
+        elif isinstance(target_id, (np.floating, np.integer)):
             target_id = target_id.item()
         
-        # 確実にスカラー値にする
-        target_id = int(target_id)
+        # 確実にPythonのintに変換
+        target_id = int(float(target_id))
         
-        # observed part (観測部分) のNaN要素を除去
-        for frame_num in range(obs_lenght):
-            if len(x_seq[frame_num]) > 0:  # フレームにデータがある場合のみ処理
+        # observed part のNaN要素を除去
+        for frame_num in range(obs_length):
+            if len(x_seq[frame_num]) > 0:
                 nan_elements_index = np.where(np.isnan(x_seq[frame_num][:, 2]))
                 try:
                     x_seq[frame_num] = np.delete(x_seq[frame_num], nan_elements_index[0], axis=0)
-                except ValueError:
-                    print(f"Error occurred at frame {frame_num} in observed part")
+                except (ValueError, IndexError):
+                    print(f"Error processing frame {frame_num}")
                     pass
-
-        # predicted part (予測部分) でtarget_id以外を除去
-        for frame_num in range(obs_lenght, obs_lenght + predicted_lenght):
-            if len(x_seq[frame_num]) > 0:  # フレームにデータがある場合のみ処理
-                # target_idと一致しない要素のインデックスを取得
-                non_target_mask = x_seq[frame_num][:, 0] != target_id
+    
+        # predicted part でtarget_id以外を除去
+        for frame_num in range(obs_length, obs_length + predicted_length):
+            if len(x_seq[frame_num]) > 0:
                 try:
-                    # target_id以外の要素を除去
-                    x_seq[frame_num] = x_seq[frame_num][~non_target_mask]
-                except ValueError:
-                    print(f"Error occurred at frame {frame_num} in predicted part")
+                    # target_idと一致しない要素を除去
+                    mask = x_seq[frame_num][:, 0] != target_id
+                    x_seq[frame_num] = x_seq[frame_num][~mask]
+                except (ValueError, IndexError):
+                    print(f"Error processing predicted frame {frame_num}")
                     pass
 
     def clean_ped_list(self, x_seq, pedlist_seq, target_id, obs_lenght, predicted_lenght):
