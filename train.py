@@ -129,9 +129,29 @@ def train(args):
     if validation_epoch_list:  # リストが空でないことを確認
         validation_epoch_list[-1] -= 1
 
+    # DataLoaderに必要な属性がない場合はデフォルト値を設定
+    if not hasattr(args, 'data_dir'):
+        args.data_dir = f_prefix + '/data'
+    if not hasattr(args, 'dataset'):
+        args.dataset = 'eth'  # デフォルトデータセット
+    if not hasattr(args, 'class_balance'):
+        args.class_balance = -1
+    if not hasattr(args, 'force_preprocessing'):
+        args.force_preprocessing = True
+
+    # 簡単なロガークラス
+    class SimpleLogger:
+        def info(self, message):
+            print(f"INFO: {message}")
+        def warning(self, message):
+            print(f"WARNING: {message}")
+        def error(self, message):
+            print(f"ERROR: {message}")
+
     # Create the data loader object. This object would preprocess the data in terms of
     # batches each of size args.batch_size, of length args.seq_length
-    dataloader = DataLoader(sample_args, DummyLogger())
+    # sample_args を args に修正
+    dataloader = DataLoader(args, SimpleLogger())
 
     model_name = "LSTM"
     method_name = "SOCIALLSTM"
@@ -189,6 +209,8 @@ def train(args):
     dataset_pointer_ins_grid = -1
 
     [grids.append([]) for dataset in range(dataloader.get_len_of_dataset())]
+
+    # 以下は元のtraining loopが続きます...
 
     # Training
     for epoch in range(args.num_epochs):
