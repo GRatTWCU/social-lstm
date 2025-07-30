@@ -128,30 +128,29 @@ def train(args):
 
     # DataLoaderのインスタンス化を試行
     try:
-        # 新しいインターフェースを試す
-        dataloader = DataLoader(f_prefix, args.batch_size, args.seq_length, args.num_validation, forcePreProcess=True)
+        # 最もシンプルなインターフェースを試す
+        dataloader = DataLoader(f_prefix, args.batch_size, args.seq_length, args.num_validation)
     except TypeError as e:
-        print(f"Old interface failed: {e}")
+        print(f"Basic interface failed: {e}")
         try:
-            # 別のインターフェースを試す
-            dataloader = DataLoader(f_prefix, args.batch_size, args.seq_length, args.num_validation)
+            # argsオブジェクトに必要な属性を追加
+            if not hasattr(args, 'data_dir'):
+                args.data_dir = f_prefix + '/data'
+            if not hasattr(args, 'dataset'):
+                args.dataset = 'eth'
+            if not hasattr(args, 'class_balance'):
+                args.class_balance = -1
+            if not hasattr(args, 'force_preprocessing'):
+                args.force_preprocessing = True
+            
+            dataloader = DataLoader(args, SimpleLogger())
         except Exception as e2:
-            print(f"Alternative interface failed: {e2}")
-            # 最新のインターフェースを試す
+            print(f"Args interface failed: {e2}")
             try:
-                # argsオブジェクトに必要な属性を追加
-                if not hasattr(args, 'data_dir'):
-                    args.data_dir = f_prefix + '/data'
-                if not hasattr(args, 'dataset'):
-                    args.dataset = 'eth'
-                if not hasattr(args, 'class_balance'):
-                    args.class_balance = -1
-                if not hasattr(args, 'force_preprocessing'):
-                    args.force_preprocessing = True
-                
-                dataloader = DataLoader(args, SimpleLogger())
+                # 引数なしで試す
+                dataloader = DataLoader()
             except Exception as e3:
-                print(f"Args interface failed: {e3}")
+                print(f"No args interface failed: {e3}")
                 raise Exception(f"Could not initialize DataLoader with any interface. Errors: {e}, {e2}, {e3}")
 
     model_name = "LSTM"
