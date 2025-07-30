@@ -308,53 +308,54 @@ class DataLoader():
         return np.array(ped_seq)
     
     # ---------------- ここが修正された関数です ----------------
+    # ---------------- 修正された関数です ----------------
     def clean_test_data(self, x_seq, target_id, obs_length, predicted_length):
-    """remove (pedid, x , y) array if x or y is nan for each frame in observed part"""
-    
-    # target_idを確実にスカラーに変換
-    if hasattr(target_id, '__iter__') and not isinstance(target_id, str):
-        if isinstance(target_id, (list, tuple)):
-            target_id = target_id[0] if len(target_id) > 0 else 0
-        elif isinstance(target_id, np.ndarray):
-            target_id = target_id.flat[0] if target_id.size > 0 else 0
-        else:
-            target_id = next(iter(target_id))
-    
-    if hasattr(target_id, 'item'):
-        target_id = target_id.item()
-    
-    # 確実にPythonのintに変換
-    target_id = int(float(target_id))
-    
-    print(f"DEBUG clean_test_data: target_id = {target_id} (type: {type(target_id)})")
-    
-    # observed part のNaN要素を除去
-    for frame_num in range(obs_length):
-        if len(x_seq[frame_num]) > 0:
-            # x, y座標のNaN値チェック（列インデックス1, 2）
-            nan_mask_x = np.isnan(x_seq[frame_num][:, 1])
-            nan_mask_y = np.isnan(x_seq[frame_num][:, 2])
-            nan_mask = nan_mask_x | nan_mask_y
-            
-            # NaN要素を除去
-            x_seq[frame_num] = x_seq[frame_num][~nan_mask]
-    
-    # predicted part でtarget_id以外を除去
-    for frame_num in range(obs_length, obs_length + predicted_length):
-        if len(x_seq[frame_num]) > 0:
-            # デバッグ情報
-            if frame_num == obs_length:  # 最初の予測フレームのみ
-                print(f"DEBUG: Frame {frame_num} shape: {x_seq[frame_num].shape}")
-                print(f"DEBUG: Frame {frame_num} ped_ids: {x_seq[frame_num][:, 0]}")
-            
-            try:
-                # target_idと一致する要素のみ保持
-                target_mask = x_seq[frame_num][:, 0] == target_id
-                x_seq[frame_num] = x_seq[frame_num][target_mask]
+        """remove (pedid, x , y) array if x or y is nan for each frame in observed part"""
+        
+        # target_idを確実にスカラーに変換
+        if hasattr(target_id, '__iter__') and not isinstance(target_id, str):
+            if isinstance(target_id, (list, tuple)):
+                target_id = target_id[0] if len(target_id) > 0 else 0
+            elif isinstance(target_id, np.ndarray):
+                target_id = target_id.flat[0] if target_id.size > 0 else 0
+            else:
+                target_id = next(iter(target_id))
+        
+        if hasattr(target_id, 'item'):
+            target_id = target_id.item()
+        
+        # 確実にPythonのintに変換
+        target_id = int(float(target_id))
+        
+        print(f"DEBUG clean_test_data: target_id = {target_id} (type: {type(target_id)})")
+        
+        # observed part のNaN要素を除去
+        for frame_num in range(obs_length):
+            if len(x_seq[frame_num]) > 0:
+                # x, y座標のNaN値チェック（列インデックス1, 2）
+                nan_mask_x = np.isnan(x_seq[frame_num][:, 1])
+                nan_mask_y = np.isnan(x_seq[frame_num][:, 2])
+                nan_mask = nan_mask_x | nan_mask_y
                 
-            except (ValueError, IndexError, TypeError) as e:
-                print(f"Error processing predicted frame {frame_num}: {e}")
-                print(f"x_seq[{frame_num}] shape: {x_seq[frame_num].shape if len(x_seq[frame_num]) > 0 else 'empty'}")
-                print(f"target_id: {target_id} (type: {type(target_id)})")
-                # エラーが発生した場合、そのフレームを空にする
-                x_seq[frame_num] = np.array([]).reshape(0, 3)
+                # NaN要素を除去
+                x_seq[frame_num] = x_seq[frame_num][~nan_mask]
+        
+        # predicted part でtarget_id以外を除去
+        for frame_num in range(obs_length, obs_length + predicted_length):
+            if len(x_seq[frame_num]) > 0:
+                # デバッグ情報
+                if frame_num == obs_length:  # 最初の予測フレームのみ
+                    print(f"DEBUG: Frame {frame_num} shape: {x_seq[frame_num].shape}")
+                    print(f"DEBUG: Frame {frame_num} ped_ids: {x_seq[frame_num][:, 0]}")
+                
+                try:
+                    # target_idと一致する要素のみ保持
+                    target_mask = x_seq[frame_num][:, 0] == target_id
+                    x_seq[frame_num] = x_seq[frame_num][target_mask]
+                    
+                except (ValueError, IndexError, TypeError) as e:
+                    print(f"Error processing predicted frame {frame_num}: {e}")
+                    print(f"x_seq[{frame_num}] shape: {x_seq[frame_num].shape if len(x_seq[frame_num]) > 0 else 'empty'}")
+                    print(f"target_id: {target_id} (type: {type(target_id)})")
+                    # エラーが発生した場合、そのフレームを空にする
+                    x_seq[frame_num] = np.array([]).reshape(0, 3)
