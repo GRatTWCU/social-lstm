@@ -131,44 +131,26 @@ def main():
             # Get the sequence
             x_seq, d_seq, numPedsList_seq, PedsList_seq, target_id = x[0], d[0], numPedsList[0], PedsList[0], target_ids[0]
             
-            # target_idの型変換を確実に行う
-            print(f"Original target_id type: {type(target_id)}, value: {target_id}")
-            
-            # target_idが配列やリストの場合の処理
-            if isinstance(target_id, (list, tuple)):
-                if len(target_id) > 0:
-                    target_id = target_id[0]
-                else:
-                    print("Warning: Empty target_id list, skipping batch")
-                    continue
-            elif isinstance(target_id, np.ndarray):
-                if target_id.size > 0:
-                    target_id = target_id.flatten()[0]
-                else:
-                    print("Warning: Empty target_id array, skipping batch")
-                    continue
-            elif hasattr(target_id, 'item'):
-                target_id = target_id.item()
-            
-            # 最終的にスカラー値に変換
-            try:
-                if isinstance(target_id, (np.floating, np.integer)):
-                    target_id = float(target_id)
-                target_id = int(float(target_id))
-                print(f"Converted target_id: {target_id}")
-            except (ValueError, TypeError) as e:
-                print(f"Error converting target_id: {e}, skipping batch")
-                continue
-            
-            # データのクリーニング前にデバッグ情報を出力
-            print(f"x_seq shape: {x_seq.shape if hasattr(x_seq, 'shape') else 'No shape'}")
-            print(f"target_id: {target_id} (type: {type(target_id)})")
-            
+            # target_idは既にutils.pyで処理されているはずだが、念のため確認
+            if not isinstance(target_id, (int, np.integer)) or hasattr(target_id, '__len__'):
+                print(f"Warning: target_id is not a scalar integer: {target_id}, type: {type(target_id)}")
+                # 強制的にスカラーに変換
+                if hasattr(target_id, '__iter__') and not isinstance(target_id, str):
+                    target_id = next(iter(target_id))
+                if hasattr(target_id, 'item'):
+                    target_id = target_id.item()
+                target_id = int(target_id)
+                print(f"Forced conversion to: {target_id}")
+
             try:
                 dataloader.clean_test_data(x_seq, target_id, sample_args.obs_length, sample_args.pred_length)
                 dataloader.clean_ped_list(x_seq, PedsList_seq, target_id, sample_args.obs_length, sample_args.pred_length)
             except Exception as e:
                 print(f"Error in data cleaning: {e}")
+                print(f"x_seq type: {type(x_seq)}")
+                print(f"target_id: {target_id} (type: {type(target_id)})")
+                if hasattr(x_seq, 'shape'):
+                    print(f"x_seq shape: {x_seq.shape}")
                 print(f"Skipping batch {batch}")
                 continue
 
@@ -222,9 +204,7 @@ def main():
             # revert the points back to original space
             ret_x_seq = revert_seq(ret_x_seq, PedsList_seq, lookup_seq, first_values_dict)
             
-            # 【修正】予測部分の正しい評価
-            # ADE: 予測部分（obs_length以降）の平均変位誤差
-            # FDE: 予測部分の最終時刻での変位誤差
+            # 予測部分の正しい評価
             pred_start = sample_args.obs_length
             pred_end = sample_args.obs_length + sample_args.pred_length
             
@@ -264,7 +244,7 @@ def main():
             if (batch + 1) % 500 == 0:
                 print('Current file : ', dataloader.get_file_name(0), ' Processed trajectory number : ', batch+1, 'out of', dataloader.num_batches, 'trajectories in time', end - start)
 
-            if dataset_pointer_ins is not dataloader.dataset_pointer:
+            if dataset_pointer_ins != dataloader.dataset_pointer:
                 if dataloader.dataset_pointer != 0:
                     iteration_submission.append(submission)
                     iteration_result.append(results)
@@ -293,7 +273,6 @@ def main():
             smallest_err_iter_num = iteration
             smallest_err = total_error
 
-        # 【修正】正しいラベルで出力
         print('Iteration:', iteration+1, ' ADE (prediction part) mean error: ', avg_ade)
         print('Iteration:', iteration+1, ' FDE (prediction part) final error: ', avg_fde)
 
