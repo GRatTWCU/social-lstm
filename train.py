@@ -92,7 +92,7 @@ def main():
     parser.add_argument('--grid', action="store_true", default=True,
                         help='Whether store grids and use further epoch')
     
-    # DataLoaderに必要な追加引数
+    # DataLoaderに必要な追加引数（これらを追加）
     parser.add_argument('--data_dir', type=str, default='./data',
                         help='Data directory')
     parser.add_argument('--dataset', type=str, default='eth',
@@ -106,6 +106,8 @@ def main():
     
     train(args)
 
+
+# train.py の修正箇所（122行目付近）
 
 def train(args):
     origin = (0, 0)
@@ -127,10 +129,31 @@ def train(args):
     if validation_epoch_list:  # リストが空でないことを確認
         validation_epoch_list[-1] -= 1
 
-    # Create the data loader object. This object would preprocess the data in terms of
-    # batches each of size args.batch_size, of length args.seq_length
-    dataloader = DataLoader(f_prefix, args.batch_size, args.seq_length, args.num_validation, forcePreProcess=True)
+    # DataLoaderに必要な属性を追加
+    if not hasattr(args, 'data_dir'):
+        args.data_dir = f_prefix + '/data'
+    if not hasattr(args, 'dataset'):
+        args.dataset = 'eth'  # デフォルトデータセット
+    if not hasattr(args, 'class_balance'):
+        args.class_balance = -1
+    if not hasattr(args, 'force_preprocessing'):
+        args.force_preprocessing = True
 
+    # 簡単なロガークラス
+    class SimpleLogger:
+        def info(self, message):
+            print(f"INFO: {message}")
+        def warning(self, message):
+            print(f"WARNING: {message}")
+        def error(self, message):
+            print(f"ERROR: {message}")
+
+    # 古い呼び出し方法を新しい形式に変更
+    # 変更前: dataloader = DataLoader(f_prefix, args.batch_size, args.seq_length, args.num_validation, forcePreProcess=True)
+    # 変更後:
+    dataloader = DataLoader(args, SimpleLogger())
+
+    # 以下は元のコードと同じ...
     model_name = "LSTM"
     method_name = "SOCIALLSTM"
     save_tar_name = method_name+"_lstm_model_"
