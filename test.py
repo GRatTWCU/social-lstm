@@ -1,427 +1,721 @@
 import os
 import pickle
-import argparse
-import time
-import subprocess
-import torch
-from torch.autograd import Variable
 import numpy as np
-from utils import DataLoader
-from helper import getCoef, sample_gaussian_2d, get_mean_error, get_final_error
+import pandas as pd
+import random
+import torch
+import math
+from torch.autograd import Variable
 from helper import *
-from grid import getSequenceGridMask, getGridMask
 
-# デバイス設定
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+class DataLoader():
 
-
-def main():
-    parser = argparse.ArgumentParser()
-    # Observed length of the trajectory parameter
-    parser.add_argument('--obs_length', type=int, default=8,
-                        help='Observed length of the trajectory')
-    # Predicted length of the trajectory parameter
-    parser.add_argument('--pred_length', type=int, default=12,
-                        help='Predicted length of the trajectory')
-    
-    # Model to be loaded
-    parser.add_argument('--epoch', type=int, default=14,
-                        help='Epoch of model to be loaded')
-    # cuda support
-    parser.add_argument('--use_cuda', action="store_true", default=False,
-                        help='Use GPU or not')
-    # drive support
-    parser.add_argument('--drive', action="store_true", default=False,
-                        help='Use Google drive or not')
-    # number of iteration -> we are trying many times to get lowest test error derived from observed part and prediction of observed
-    # part.Currently it is useless because we are using direct copy of observed part and no use of prediction.Test error will be 0.
-    parser.add_argument('--iteration', type=int, default=1,
-                        help='Number of iteration to create test file (smallest test errror will be selected)')
-    # gru model
-    parser.add_argument('--gru', action="store_true", default=False,
-                        help='True : GRU cell, False: LSTM cell')
-    # method selection
-    parser.add_argument('--method', type=int, default=1,
-                        help='Method of lstm will be used (1 = social lstm, 2 = obstacle lstm, 3 = vanilla lstm)')
-    
-    # Parse the parameters
-    sample_args = parser.parse_args()
-    
-    # for drive run
-    prefix = ''
-    f_prefix = '.'
-    if sample_args.drive is True:
-        prefix = 'drive/semester_project/social_lstm_final/'
-        f_prefix = 'drive/semester_project/social_lstm_final'
-
-    # run sh file for folder creation
-    if not os.path.isdir("log/"):
-        print("Directory creation script is running...")
-        subprocess.call([f_prefix+'/make_directories.sh'])
-
-    method_name = get_method_name(sample_args.method)
-    model_name = "LSTM"
-    save_tar_name = method_name+"_lstm_model_"
-    if sample_args.gru:
-        model_name = "GRU"
-        save_tar_name = method_name+"_gru_model_"
-
-    print("Selected method name: ", method_name, " model name: ", model_name)
-
-    # Save directory
-    save_directory = os.path.join(f_prefix, 'model/', method_name, model_name)
-    # plot directory for plotting in the future
-    plot_directory = os.path.join(f_prefix, 'plot/', method_name, model_name)
-    result_directory = os.path.join(f_prefix, 'result/', method_name)
-    plot_test_file_directory = 'test'
-
-    # Define the path for the config file for saved args
-    with open(os.path.join(save_directory,'config.pkl'), 'rb') as f:
-        saved_args = pickle.load(f)
-
-    seq_length = sample_args.pred_length + sample_args.obs_length
-
-    # Create the DataLoader object
-    dataloader = DataLoader(f_prefix, 1, seq_length, forcePreProcess=True, infer=True)
-    create_directories(os.path.join(result_directory, model_name), dataloader.get_all_directory_namelist())
-    create_directories(plot_directory, [plot_test_file_directory])
-    dataloader.reset_batch_pointer()
-
-    dataset_pointer_ins = dataloader.dataset_pointer
-    
-    smallest_err = 100000
-    smallest_err_iter_num = -1
-    origin = (0, 0)
-    reference_point = (0, 1)
-
-    submission_store = []  # store submission data points (txt)
-    result_store = []  # store points for plotting
-
-    for iteration in range(sample_args.iteration):
-        # Initialize net
-        net = get_model(sample_args.method, saved_args, True)
-
-        if sample_args.use_cuda:        
-            net = net.to(device)
-
-        # Get the checkpoint path
-        checkpoint_path = os.path.join(save_directory, save_tar_name+str(sample_args.epoch)+'.tar')
-        if os.path.isfile(checkpoint_path):
-            print('Loading checkpoint')
-            checkpoint = torch.load(checkpoint_path, map_location=device)
-            model_epoch = checkpoint['epoch']
-            net.load_state_dict(checkpoint['state_dict'])
-            print('Loaded checkpoint at epoch', model_epoch)
+    def __init__(self,f_prefix, batch_size=5, seq_length=20, num_of_validation = 0, forcePreProcess=False, infer=False, generate = False):
+        '''
+        Initialiser function for the DataLoader class
+        params:
+        batch_size : Size of the mini-batch
+        seq_length : Sequence length to be considered
+        num_of_validation : number of validation dataset will be used
+        infer : flag for test mode
+        generate : flag for data generation mode
+        forcePreProcess : Flag to forcefully preprocess the data again from csv files
+        '''
+        # base test files
+        base_test_dataset=  ['/data/test/biwi/biwi_eth.txt', 
+                        '/data/test/crowds/crowds_zara01.txt',
+                        '/data/test/crowds/uni_examples.txt', 
+                        '/data/test/stanford/coupa_0.txt',
+                         '/data/test/stanford/coupa_1.txt', '/data/test/stanford/gates_2.txt','/data/test/stanford/hyang_0.txt','/data/test/stanford/hyang_1.txt','/data/test/stanford/hyang_3.txt','/data/test/stanford/hyang_8.txt',
+                          '/data/test/stanford/little_0.txt','/data/test/stanford/little_1.txt','/data/test/stanford/little_2.txt','/data/test/stanford/little_3.txt','/data/test/stanford/nexus_5.txt','/data/test/stanford/nexus_6.txt',
+                          '/data/test/stanford/quad_0.txt','/data/test/stanford/quad_1.txt','/data/test/stanford/quad_2.txt','/data/test/stanford/quad_3.txt'
+                          ]
+        #base train files
+        base_train_dataset = ['/data/train/biwi/biwi_hotel.txt', 
+                        #'/data/train/crowds/arxiepiskopi1.txt','/data/train/crowds/crowds_zara02.txt',
+                        #'/data/train/crowds/crowds_zara03.txt','/data/train/crowds/students001.txt','/data/train/crowds/students003.txt',
+                        #'/data/train/mot/PETS09-S2L1.txt',
+                        #'/data/train/stanford/bookstore_0.txt','/data/train/stanford/bookstore_1.txt','/data/train/stanford/bookstore_2.txt','/data/train/stanford/bookstore_3.txt','/data/train/stanford/coupa_3.txt','/data/train/stanford/deathCircle_0.txt','/data/train/stanford/deathCircle_1.txt','/data/train/stanford/deathCircle_2.txt','/data/train/stanford/deathCircle_3.txt',
+                        #'/data/train/stanford/deathCircle_4.txt','/data/train/stanford/gates_0.txt','/data/train/stanford/gates_1.txt','/data/train/stanford/gates_3.txt','/data/train/stanford/gates_4.txt','/data/train/stanford/gates_5.txt','/data/train/stanford/gates_6.txt','/data/train/stanford/gates_7.txt','/data/train/stanford/gates_8.txt','/data/train/stanford/hyang_4.txt',
+                        #'/data/train/stanford/hyang_5.txt','/data/train/stanford/hyang_6.txt','/data/train/stanford/hyang_9.txt','/data/train/stanford/nexus_0.txt','/data/train/stanford/nexus_1.txt','/data/train/stanford/nexus_2.txt','/data/train/stanford/nexus_3.txt','/data/train/stanford/nexus_4.txt','/data/train/stanford/nexus_7.txt','/data/train/stanford/nexus_8.txt','/data/train/stanford/nexus_9.txt'
+                        ]
+        # dimensions of each file set
+        self.dataset_dimensions = {'biwi':[720, 576], 'crowds':[720, 576], 'stanford':[595, 326], 'mot':[768, 576]}
         
-        # For each batch
-        iteration_submission = []
-        iteration_result = []
-        results = []
-        submission = []
-       
-        # Variable to maintain total error
-        total_error = 0
-        final_error = 0
+        # List of data directories where raw data resides
+        self.base_train_path = 'data/train/'
+        self.base_test_path = 'data/test/'
+        self.base_validation_path = 'data/validation/'
 
-        print(f"Starting test with {dataloader.num_batches} batches")
-        
-        for batch in range(dataloader.num_batches):
-            start = time.time()
-            try:
-                # Get data
-                x, y, d, numPedsList, PedsList, target_ids = dataloader.next_batch()
-                print(f"Successfully got batch {batch+1}")
-            except Exception as e:
-                print(f"Error getting batch {batch+1}: {e}")
-                continue
-
-            # Get the sequence
-            x_seq, d_seq, numPedsList_seq, PedsList_seq, target_id = x[0], d[0], numPedsList[0], PedsList[0], target_ids[0]
-            
-            # target_idの型チェックと変換（より厳密に）
-            print(f"Processing target_id: {target_id} (type: {type(target_id)})")
-            
-            if isinstance(target_id, (list, np.ndarray)):
-                target_id = target_id[0] if len(target_id) > 0 else 0
-            elif hasattr(target_id, 'item'):  # numpy scalar の場合
-                target_id = target_id.item()
-            elif isinstance(target_id, (np.floating, np.integer)):  # numpy数値型の場合
-                target_id = target_id.item()
-            
-            # 確実にPythonのintに変換
-            target_id = int(float(target_id))
-            print(f"Converted target_id: {target_id} (type: {type(target_id)})")
-            
-            dataloader.clean_test_data(x_seq, target_id, sample_args.obs_length, sample_args.pred_length)
-            dataloader.clean_ped_list(x_seq, PedsList_seq, target_id, sample_args.obs_length, sample_args.pred_length)
-
-            # get processing file name and then get dimensions of file
-            folder_name = dataloader.get_directory_name_with_pointer(d_seq)
-            dataset_data = dataloader.get_dataset_dimension(folder_name)
-            
-            try:
-                # dense vector creation
-                x_seq, lookup_seq = dataloader.convert_proper_array(x_seq, numPedsList_seq, PedsList_seq)
-                print(f"convert_proper_array successful, lookup_seq keys: {len(lookup_seq)}")
-            except Exception as e:
-                print(f"Error in convert_proper_array: {e}")
-                continue
-            
-            # will be used for error calculation
-            orig_x_seq = x_seq.clone() 
-            
-            # target_idの存在確認（より詳細なデバッグ情報付き）
-            print(f"Available keys in lookup_seq: {list(lookup_seq.keys())}")
-            
-            if target_id not in lookup_seq:
-                print(f"Error: target_id {target_id} not found in lookup_seq.")
-                print(f"Available pedestrian IDs: {list(lookup_seq.keys())}")
-                # 最初の歩行者IDを代用として使用
-                if lookup_seq:
-                    target_id = list(lookup_seq.keys())[0]
-                    print(f"Using first available pedestrian ID: {target_id}")
-                else:
-                    print("No pedestrians found in lookup_seq. Skipping this batch.")
-                    continue
-                
-            target_id_values = orig_x_seq[0][lookup_seq[target_id], 0:2]
-            
-            # grid mask calculation
-            if sample_args.method == 2:  # obstacle lstm
-                grid_seq = getSequenceGridMask(x_seq, dataset_data, PedsList_seq, saved_args.neighborhood_size, saved_args.grid_size, saved_args.use_cuda, True)
-            elif sample_args.method == 1:  # social lstm   
-                grid_seq = getSequenceGridMask(x_seq, dataset_data, PedsList_seq, saved_args.neighborhood_size, saved_args.grid_size, saved_args.use_cuda)
-
-            # vectorize datapoints
-            x_seq, first_values_dict = vectorize_seq(x_seq, PedsList_seq, lookup_seq)
-
-            # <------------- Experimental block ---------------->
-            # x_seq = translate(x_seq, PedsList_seq, lookup_seq, target_id_values)
-            # angle = angle_between(reference_point, (x_seq[1][lookup_seq[target_id], 0].data.numpy(), x_seq[1][lookup_seq[target_id], 1].data.numpy()))
-            # x_seq = rotate_traj_with_target_ped(x_seq, angle, PedsList_seq, lookup_seq)
-            # grid_seq = getSequenceGridMask(x_seq[:sample_args.obs_length], dataset_data, PedsList_seq, saved_args.neighborhood_size, saved_args.grid_size, sample_args.use_cuda)
-            # x_seq, first_values_dict = vectorize_seq(x_seq, PedsList_seq, lookup_seq)
-
-            if sample_args.use_cuda:
-                x_seq = x_seq.to(device)
-
-            # The sample function
-            if sample_args.method == 3:  # vanilla lstm
-                # Extract the observed part of the trajectories
-                obs_traj, obs_PedsList_seq = x_seq[:sample_args.obs_length], PedsList_seq[:sample_args.obs_length]
-                ret_x_seq = sample(obs_traj, obs_PedsList_seq, sample_args, net, x_seq, PedsList_seq, saved_args, dataset_data, dataloader, lookup_seq, numPedsList_seq, sample_args.gru)
-            else:
-                # Extract the observed part of the trajectories
-                obs_traj, obs_PedsList_seq, obs_grid = x_seq[:sample_args.obs_length], PedsList_seq[:sample_args.obs_length], grid_seq[:sample_args.obs_length]
-                ret_x_seq = sample(obs_traj, obs_PedsList_seq, sample_args, net, x_seq, PedsList_seq, saved_args, dataset_data, dataloader, lookup_seq, numPedsList_seq, sample_args.gru, obs_grid)
-            
-            # revert the points back to original space
-            ret_x_seq = revert_seq(ret_x_seq, PedsList_seq, lookup_seq, first_values_dict)
-            
-            # <--------------------- Experimental inverse block ---------------------->
-            # ret_x_seq = revert_seq(ret_x_seq, PedsList_seq, lookup_seq, target_id_values, first_values_dict)
-            # ret_x_seq = rotate_traj_with_target_ped(ret_x_seq, -angle, PedsList_seq, lookup_seq)
-            # ret_x_seq = translate(ret_x_seq, PedsList_seq, lookup_seq, -target_id_values)
-            
-            try:
-                # ADE/FDE計算の前に値をチェック
-                print(f"ret_x_seq shape: {ret_x_seq.shape}")
-                print(f"orig_x_seq shape: {orig_x_seq.shape}")
-                print(f"pred_start: {pred_start}, pred_end: {pred_end}")
-                
-                if pred_end > ret_x_seq.shape[0]:
-                    print(f"Error: pred_end ({pred_end}) > ret_x_seq length ({ret_x_seq.shape[0]})")
-                    continue
-                    
-                print(f"ret_x_seq[pred_start:pred_end] has nan: {torch.isnan(ret_x_seq[pred_start:pred_end]).any()}")
-                print(f"orig_x_seq[pred_start:pred_end] has nan: {torch.isnan(orig_x_seq[pred_start:pred_end]).any()}")
-
-                # 予測部分のADE計算
-                ade = get_mean_error(
-                    ret_x_seq[pred_start:pred_end].data, 
-                    orig_x_seq[pred_start:pred_end].data, 
-                    PedsList_seq[pred_start:pred_end], 
-                    PedsList_seq[pred_start:pred_end], 
-                    sample_args.use_cuda, 
-                    lookup_seq
-                )
-                print(f"Calculated ADE: {ade}")
-                
-                # 予測部分のFDE計算（最終時刻のみ）
-                fde = get_final_error(
-                    ret_x_seq[pred_end-1:pred_end].data, 
-                    orig_x_seq[pred_end-1:pred_end].data, 
-                    PedsList_seq[pred_end-1:pred_end], 
-                    PedsList_seq[pred_end-1:pred_end], 
-                    lookup_seq
-                )
-                print(f"Calculated FDE: {fde}")
-                
-                total_error += ade
-                final_error += fde
-                
-            except Exception as e:
-                print(f"Error calculating ADE/FDE: {e}")
-                import traceback
-                traceback.print_exc()
-                continue
-
-            end = time.time()
-
-            print('Current file : ', dataloader.get_file_name(0), ' Processed trajectory number : ', batch+1, 'out of', dataloader.num_batches, 'trajectories in time', end - start)
-
-            if dataset_pointer_ins is not dataloader.dataset_pointer:
-                if dataloader.dataset_pointer != 0:
-                    iteration_submission.append(submission)
-                    iteration_result.append(results)
-
-                dataset_pointer_ins = dataloader.dataset_pointer
-                submission = []
-                results = []
-
-            submission.append(submission_preprocess(dataloader, ret_x_seq.data[sample_args.obs_length:, lookup_seq[target_id], :].cpu().numpy(), sample_args.pred_length, sample_args.obs_length, target_id))
-            results.append((x_seq.data.cpu().numpy(), ret_x_seq.data.cpu().numpy(), PedsList_seq, lookup_seq, dataloader.get_frame_sequence(seq_length), target_id, sample_args.obs_length))
-
-        iteration_submission.append(submission)
-        iteration_result.append(results)
-
-        submission_store.append(iteration_submission)
-        result_store.append(iteration_result)
-
-        if total_error < smallest_err:
-            print("**********************************************************")
-            print('Best iteration has been changed. Previous best iteration: ', smallest_err_iter_num+1, 'Error: ', smallest_err / dataloader.num_batches)
-            print('New best iteration : ', iteration+1, 'Error: ', total_error / dataloader.num_batches)
-            smallest_err_iter_num = iteration
-            smallest_err = total_error
-
-        print('Iteration:', iteration+1, ' ADE (prediction part) mean error: ', total_error / dataloader.num_batches)
-        print('Iteration:', iteration+1, ' FDE (prediction part) final error: ', final_error / dataloader.num_batches)
-
-    print('Smallest error iteration:', smallest_err_iter_num+1)
-    dataloader.write_to_file(submission_store[smallest_err_iter_num], result_directory, prefix, model_name)
-    dataloader.write_to_plot_file(result_store[smallest_err_iter_num], os.path.join(plot_directory, plot_test_file_directory))
-
-
-def sample(x_seq, Pedlist, args, net, true_x_seq, true_Pedlist, saved_args, dimensions, dataloader, look_up, num_pedlist, is_gru, grid=None):
-    '''
-    The sample function
-    params:
-    x_seq: Input positions
-    Pedlist: Peds present in each frame
-    args: arguments
-    net: The model
-    true_x_seq: True positions
-    true_Pedlist: The true peds present in each frame
-    saved_args: Training arguments
-    dimensions: The dimensions of the dataset
-    target_id: ped_id number that try to predict in this sequence
-    '''
-    # Number of peds in the sequence
-    numx_seq = len(look_up)
-
-    with torch.no_grad():
-        # Construct variables for hidden and cell states
-        hidden_states = Variable(torch.zeros(numx_seq, net.args.rnn_size))
-        if args.use_cuda:
-            hidden_states = hidden_states.to(device)
-        if not is_gru:
-            cell_states = Variable(torch.zeros(numx_seq, net.args.rnn_size))
-            if args.use_cuda:
-                cell_states = cell_states.to(device)
+        # check infer flag, if true choose test directory as base directory
+        if infer is False:
+            self.base_data_dirs = base_train_dataset
         else:
-            cell_states = None
+            self.base_data_dirs = base_test_dataset
 
-        ret_x_seq = Variable(torch.zeros(args.obs_length+args.pred_length, numx_seq, 2))
+        # get all files using python os and base directories
+        self.train_dataset = self.get_dataset_path(self.base_train_path, f_prefix)
+        self.test_dataset = self.get_dataset_path(self.base_test_path, f_prefix)
+        self.validation_dataset = self.get_dataset_path(self.base_validation_path, f_prefix)
 
-        # Initialize the return data structure
-        if args.use_cuda:
-            ret_x_seq = ret_x_seq.to(device)
+        # if generate mode, use directly train base files
+        if generate:
+            self.train_dataset = [os.path.join(f_prefix, dataset[1:]) for dataset in base_train_dataset]
 
-        # For the observed part of the trajectory
-        for tstep in range(args.obs_length-1):
-            if grid is None:  # vanilla lstm
-                # Do a forward prop
-                out_obs, hidden_states, cell_states = net(x_seq[tstep].view(1, numx_seq, 2), hidden_states, cell_states, [Pedlist[tstep]], [num_pedlist[tstep]], dataloader, look_up)
+        #request of use of validation dataset
+        if num_of_validation>0:
+            self.additional_validation = True
+        else:
+            self.additional_validation = False
+
+        # check validation dataset availibility and clip the reuqested number if it is bigger than available validation dataset
+        if self.additional_validation:
+            if len(self.validation_dataset) == 0:
+                print("There is no validation dataset.Aborted.")
+                self.additional_validation = False
             else:
-                # Do a forward prop
-                out_obs, hidden_states, cell_states = net(x_seq[tstep].view(1, numx_seq, 2), [grid[tstep]], hidden_states, cell_states, [Pedlist[tstep]], [num_pedlist[tstep]], dataloader, look_up)
+                num_of_validation = np.clip(num_of_validation, 0, len(self.validation_dataset))
+                self.validation_dataset = random.sample(self.validation_dataset, num_of_validation)
 
-            # Extract the mean, std and corr of the bivariate Gaussian
-            mux, muy, sx, sy, corr = getCoef(out_obs)
-            # Sample from the bivariate Gaussian
-            next_x, next_y = sample_gaussian_2d(mux.data, muy.data, sx.data, sy.data, corr.data, true_Pedlist[tstep], look_up)
-            ret_x_seq[tstep + 1, :, 0] = next_x
-            ret_x_seq[tstep + 1, :, 1] = next_y
-
-        ret_x_seq[:args.obs_length, :, :] = x_seq.clone()
-
-        # Last seen grid
-        if grid is not None:  # no vanilla lstm
-            prev_grid = grid[-1].clone()
-
-        # For the predicted part of the trajectory
-        for tstep in range(args.obs_length-1, args.pred_length + args.obs_length-1):
-            # Do a forward prop
-            if grid is None:  # vanilla lstm
-                outputs, hidden_states, cell_states = net(ret_x_seq[tstep].view(1, numx_seq, 2), hidden_states, cell_states, [true_Pedlist[tstep]], [num_pedlist[tstep]], dataloader, look_up)
+        # if not infer mode, use train dataset
+        if infer is False:
+            self.data_dirs = self.train_dataset
+        else:
+            # use validation dataset
+            if self.additional_validation:
+                self.data_dirs = self.validation_dataset
+            # use test dataset
             else:
-                outputs, hidden_states, cell_states = net(ret_x_seq[tstep].view(1, numx_seq, 2), [prev_grid], hidden_states, cell_states, [true_Pedlist[tstep]], [num_pedlist[tstep]], dataloader, look_up)
+                self.data_dirs = self.test_dataset
 
-            # Extract the mean, std and corr of the bivariate Gaussian
-            mux, muy, sx, sy, corr = getCoef(outputs)
-            # Sample from the bivariate Gaussian
-            next_x, next_y = sample_gaussian_2d(mux.data, muy.data, sx.data, sy.data, corr.data, true_Pedlist[tstep], look_up)
+        self.infer = infer
+        self.generate = generate
 
-            # Store the predicted position
-            ret_x_seq[tstep + 1, :, 0] = next_x
-            ret_x_seq[tstep + 1, :, 1] = next_y
+        # Number of datasets
+        self.numDatasets = len(self.data_dirs)
 
-            # List of x_seq at the last time-step (assuming they exist until the end)
-            true_Pedlist[tstep+1] = [int(_x_seq) for _x_seq in true_Pedlist[tstep+1]]
-            next_ped_list = true_Pedlist[tstep+1].copy()
-            converted_pedlist = [look_up[_x_seq] for _x_seq in next_ped_list]
-            list_of_x_seq = Variable(torch.LongTensor(converted_pedlist))
+        # array for keepinng target ped ids for each sequence
+        self.target_ids = []
 
-            if args.use_cuda:
-                list_of_x_seq = list_of_x_seq.to(device)
-           
-            # Get their predicted positions
-            current_x_seq = torch.index_select(ret_x_seq[tstep+1], 0, list_of_x_seq)
+        # Data directory where the pre-processed pickle file resides
+        self.train_data_dir = os.path.join(f_prefix, self.base_train_path)
+        self.test_data_dir = os.path.join(f_prefix, self.base_test_path)
+        self.val_data_dir = os.path.join(f_prefix, self.base_validation_path)
 
-            if grid is not None:  # no vanilla lstm
-                # Compute the new grid masks with the predicted positions
-                if args.method == 2:  # obstacle lstm
-                    prev_grid = getGridMask(current_x_seq.data.cpu(), dimensions, len(true_Pedlist[tstep+1]), saved_args.neighborhood_size, saved_args.grid_size, True)
-                elif args.method == 1:  # social lstm   
-                    prev_grid = getGridMask(current_x_seq.data.cpu(), dimensions, len(true_Pedlist[tstep+1]), saved_args.neighborhood_size, saved_args.grid_size)
+        # Store the arguments
+        self.batch_size = batch_size
+        self.seq_length = seq_length
+        self.orig_seq_lenght = seq_length
 
-                prev_grid = Variable(torch.from_numpy(prev_grid).float())
-                if args.use_cuda:
-                    prev_grid = prev_grid.to(device)
+        # Validation arguments
+        self.val_fraction = 0
 
-        return ret_x_seq
+        # Define the path in which the process data would be stored
+        self.data_file_tr = os.path.join(self.train_data_dir, "trajectories_train.cpkl")        
+        self.data_file_te = os.path.join(self.base_test_path, "trajectories_test.cpkl")
+        self.data_file_vl = os.path.join(self.val_data_dir, "trajectories_val.cpkl")
 
+        # for creating a dict key: folder names, values: files in this folder
+        self.create_folder_file_dict()
 
-def submission_preprocess(dataloader, ret_x_seq, pred_length, obs_length, target_id):
-    seq_length = pred_length + obs_length
+        if self.additional_validation:
+        # If the file doesn't exist or forcePreProcess is true
+            if not(os.path.exists(self.data_file_vl)) or forcePreProcess:
+                print("Creating pre-processed validation data from raw data")
+                # Preprocess the data from the csv files of the datasets
+                # Note that this data is processed in frames
+                self.frame_preprocess(self.validation_dataset, self.data_file_vl, self.additional_validation)
 
-    # begin and end index of obs. frames in this seq.
-    begin_obs = (dataloader.frame_pointer - seq_length)
-    end_obs = (dataloader.frame_pointer - pred_length)
+        if self.infer:
+        # if infer mode, and no additional files -> test preprocessing
+            if not self.additional_validation:
+                if not(os.path.exists(self.data_file_te)) or forcePreProcess:
+                    print("Creating pre-processed test data from raw data")
+                    # Preprocess the data from the csv files of the datasets
+                    # Note that this data is processed in frames
+                    print("Working on directory: ", self.data_file_te)
+                    self.frame_preprocess(self.data_dirs, self.data_file_te)
+            # if infer mode, and there are additional validation files -> validation dataset visualization
+            else:
+                print("Validation visualization file will be created")
+        
+        # if not infer mode
+        else:
+            # If the file doesn't exist or forcePreProcess is true -> training pre-process
+            if not(os.path.exists(self.data_file_tr)) or forcePreProcess:
+                print("Creating pre-processed training data from raw data")
+                # Preprocess the data from the csv files of the datasets
+                # Note that this data is processed in frames
+                self.frame_preprocess(self.data_dirs, self.data_file_tr)
 
-    # get original data for frame number and ped ids
-    observed_data = dataloader.orig_data[dataloader.dataset_pointer][begin_obs:end_obs, :]
-    frame_number_predicted = dataloader.get_frame_sequence(pred_length)
-    ret_x_seq_c = ret_x_seq.copy()
-    ret_x_seq_c[:, [0, 1]] = ret_x_seq_c[:, [1, 0]]  # x, y -> y, x
-    repeated_id = np.repeat(target_id, pred_length)  # add id
-    id_integrated_prediction = np.append(repeated_id[:, None], ret_x_seq_c, axis=1)
-    frame_integrated_prediction = np.append(frame_number_predicted[:, None], id_integrated_prediction, axis=1)  # add frame number
-    result = np.append(observed_data, frame_integrated_prediction, axis=0)
+        if self.infer:
+            # Load the processed data from the pickle file
+            if not self.additional_validation: #test mode
+                self.load_preprocessed(self.data_file_te)
+            else:  # validation mode
+                self.load_preprocessed(self.data_file_vl, True)
 
-    return result
+        else: # training mode
+            self.load_preprocessed(self.data_file_tr)
 
+        # Reset all the data pointers of the dataloader object
+        self.reset_batch_pointer(valid=False)
+        self.reset_batch_pointer(valid=True)
 
-if __name__ == '__main__':
-    main()
+    def frame_preprocess(self, data_dirs, data_file, validation_set = False):
+        '''
+        Function that will pre-process the pixel_pos.csv files of each dataset
+        into data with occupancy grid that can be used
+        params:
+        data_dirs : List of directories where raw data resides
+        data_file : The file into which all the pre-processed data needs to be stored
+        validation_set: true when a dataset is in validation set
+        '''
+        # all_frame_data would be a list of list of numpy arrays corresponding to each dataset
+        # Each numpy array will correspond to a frame and would be of size (numPeds, 3) each row
+        # containing pedID, x, y
+        all_frame_data = []
+        # Validation frame data
+        valid_frame_data = []
+        # frameList_data would be a list of lists corresponding to each dataset
+        # Each list would contain the frameIds of all the frames in the dataset
+        frameList_data = []
+        valid_numPeds_data= []
+        # numPeds_data would be a list of lists corresponding to each dataset
+        # Ech list would contain the number of pedestrians in each frame in the dataset
+        numPeds_data = []
+        
+        #each list includes ped ids of this frame
+        pedsList_data = []
+        valid_pedsList_data = []
+        # target ped ids for each sequence
+        target_ids = []
+        orig_data = []
+
+        # Index of the current dataset
+        dataset_index = 0
+
+        # For each dataset
+        for directory in data_dirs:
+
+            # Load the data from the txt file
+            print("Now processing: ", directory)
+            column_names = ['frame_num','ped_id','y','x']
+
+            # if training mode, read train file to pandas dataframe and process
+            if self.infer is False:
+                df = pd.read_csv(directory, dtype={'frame_num':'int','ped_id':'int' }, delimiter = ' ',  header=None, names=column_names)
+                self.target_ids = np.array(df.drop_duplicates(subset=['ped_id'], keep='first', inplace=False)['ped_id'])
+
+            else:
+                # if validation mode, read validation file to pandas dataframe and process
+                if self.additional_validation:
+                    df = pd.read_csv(directory, dtype={'frame_num':'int','ped_id':'int' }, delimiter = ' ',  header=None, names=column_names)
+                    self.target_ids = np.array(df.drop_duplicates(subset=['ped_id'], keep='first', inplace=False)['ped_id'])
+
+                # if test mode, read test file to pandas dataframe and process
+                else:
+                    column_names = ['frame_num','ped_id','y','x']
+                    df = pd.read_csv(directory, dtype={'frame_num':'int','ped_id':'int' }, delimiter = ' ',  header=None, names=column_names, converters = {c:lambda x: float('nan') if x == '?' else float(x) for c in ['y','x']})
+                    self.target_ids = np.array(df[df['y'].isnull()].drop_duplicates(subset=['ped_id'], keep='first', inplace=False)['ped_id'])
+
+            # convert pandas -> numpy array
+            data = np.array(df)
+
+            # keep original copy of file
+            orig_data.append(data)
+
+            #swap x and y points (in txt file it is like -> y,x)
+            data = np.swapaxes(data,0,1)
+            
+            # get frame numbers
+            frameList = data[0, :].tolist()
+
+            # Number of frames
+            numFrames = len(frameList)
+
+            # Add the list of frameIDs to the frameList_data
+            frameList_data.append(frameList)
+            # Initialize the list of numPeds for the current dataset
+            numPeds_data.append([])
+            valid_numPeds_data.append([])
+
+            # Initialize the list of numpy arrays for the current dataset
+            all_frame_data.append([])
+            # Initialize the list of numpy arrays for the current dataset
+            valid_frame_data.append([])
+
+            # list of peds for each frame
+            pedsList_data.append([])
+            valid_pedsList_data.append([])
+
+            target_ids.append(self.target_ids)
+
+            for ind, frame in enumerate(frameList):
+
+                # Extract all pedestrians in current frame
+                pedsInFrame = data[: , data[0, :] == frame]
+
+                # Extract peds list
+                pedsList = pedsInFrame[1, :].tolist()
+
+                # Initialize the row of the numpy array
+                pedsWithPos = []
+
+                # For each ped in the current frame
+                for ped in pedsList:
+                    # Extract their x and y positions
+                    current_x = pedsInFrame[3, pedsInFrame[1, :] == ped][0]
+                    current_y = pedsInFrame[2, pedsInFrame[1, :] == ped][0]
+
+                    # Add their pedID, x, y to the row of the numpy array
+                    pedsWithPos.append([ped, current_x, current_y])
+
+                # At inference time, data generation and if dataset is a validation dataset, no validation data
+                if (ind >= numFrames * self.val_fraction) or (self.infer) or (self.generate) or (validation_set):
+                    # Add the details of all the peds in the current frame to all_frame_data
+                    all_frame_data[dataset_index].append(np.array(pedsWithPos))
+                    pedsList_data[dataset_index].append(pedsList)
+                    numPeds_data[dataset_index].append(len(pedsList))
+
+                else:
+                    valid_frame_data[dataset_index].append(np.array(pedsWithPos))
+                    valid_pedsList_data[dataset_index].append(pedsList)
+                    valid_numPeds_data[dataset_index].append(len(pedsList))
+
+            dataset_index += 1
+        # Save the arrays in the pickle file
+        f = open(data_file, "wb")
+        pickle.dump((all_frame_data, frameList_data, numPeds_data, valid_numPeds_data, valid_frame_data, pedsList_data, valid_pedsList_data, target_ids, orig_data), f, protocol=2)
+        f.close()
+
+    def load_preprocessed(self, data_file, validation_set = False):
+        '''
+        Function to load the pre-processed data into the DataLoader object
+        params:
+        data_file : the path to the pickled data file
+        validation_set : flag for validation dataset
+        '''
+        # Load data from the pickled file
+        if(validation_set):
+            print("Loading validaton datasets: ", data_file)
+        else:
+            print("Loading train or test dataset: ", data_file)
+
+        f = open(data_file, 'rb')
+        self.raw_data = pickle.load(f)
+        f.close()
+
+        # Get all the data from the pickle file
+        self.data = self.raw_data[0]
+        self.frameList = self.raw_data[1]
+        self.numPedsList = self.raw_data[2]
+        self.valid_numPedsList = self.raw_data[3]
+        self.valid_data = self.raw_data[4]
+        self.pedsList = self.raw_data[5]
+        self.valid_pedsList = self.raw_data[6]
+        self.target_ids = self.raw_data[7]
+        self.orig_data = self.raw_data[8]
+
+        counter = 0
+        valid_counter = 0
+        print('Sequence size(frame) ------>',self.seq_length)
+        print('One batch size (frame)--->-', self.batch_size*self.seq_length)
+
+        # For each dataset
+        for dataset in range(len(self.data)):
+            # get the frame data for the current dataset
+            all_frame_data = self.data[dataset]
+            valid_frame_data = self.valid_data[dataset]
+            dataset_name = self.data_dirs[dataset].split('/')[-1]
+            # calculate number of sequence 
+            num_seq_in_dataset = int(len(all_frame_data) / (self.seq_length))
+            num_valid_seq_in_dataset = int(len(valid_frame_data) / (self.seq_length))
+            if not validation_set:
+                print('Training data from training dataset(name, # frame, #sequence)--> ', dataset_name, ':', len(all_frame_data),':', (num_seq_in_dataset))
+                print('Validation data from training dataset(name, # frame, #sequence)--> ', dataset_name, ':', len(valid_frame_data),':', (num_valid_seq_in_dataset))
+            else: 
+                print('Validation data from validation dataset(name, # frame, #sequence)--> ', dataset_name, ':', len(all_frame_data),':', (num_seq_in_dataset))
+
+            # Increment the counter with the number of sequences in the current dataset
+            counter += num_seq_in_dataset
+            valid_counter += num_valid_seq_in_dataset
+
+        # Calculate the number of batches
+        self.num_batches = int(counter/self.batch_size)
+        self.valid_num_batches = int(valid_counter/self.batch_size)
+
+        if not validation_set:
+            print('Total number of training batches:', self.num_batches)
+            print('Total number of validation batches:', self.valid_num_batches)
+        else:
+            print('Total number of validation batches:', self.num_batches)
+
+    def next_batch(self):
+        '''
+        Function to get the next batch of points
+        '''
+        # Source data
+        x_batch = []
+        # Target data
+        y_batch = []
+        # Dataset data
+        d = []
+
+        # pedlist per sequence
+        numPedsList_batch = []
+
+        # pedlist per sequence
+        PedsList_batch = []
+
+        #return target_id
+        target_ids = []
+
+        # Iteration index
+        i = 0
+        while i < self.batch_size:
+            # Extract the frame data of the current dataset
+            frame_data = self.data[self.dataset_pointer]
+            numPedsList = self.numPedsList[self.dataset_pointer]
+            pedsList = self.pedsList[self.dataset_pointer]
+            # Get the frame pointer for the current dataset
+            idx = self.frame_pointer
+            # While there is still seq_length number of frames left in the current dataset
+            if idx + self.seq_length-1 < len(frame_data):
+                # All the data in this sequence
+                seq_source_frame_data = frame_data[idx:idx+self.seq_length]
+                seq_numPedsList = numPedsList[idx:idx+self.seq_length]
+                seq_PedsList = pedsList[idx:idx+self.seq_length]
+                seq_target_frame_data = frame_data[idx+1:idx+self.seq_length+1]
+
+                # Number of unique peds in this sequence of frames
+                x_batch.append(seq_source_frame_data)
+                y_batch.append(seq_target_frame_data)
+                numPedsList_batch.append(seq_numPedsList)
+                PedsList_batch.append(seq_PedsList)
+                
+                # get correct target ped id for the sequence - ROOT CAUSE FIX
+                raw_target_id = self.target_ids[self.dataset_pointer][math.floor((self.frame_pointer)/self.seq_length)]
+                if isinstance(raw_target_id, (list, np.ndarray)):
+                    target_id = int(raw_target_id[0]) if len(raw_target_id) > 0 else 0
+                elif hasattr(raw_target_id, 'item'):
+                    target_id = int(raw_target_id.item())
+                else:
+                    target_id = int(raw_target_id)
+                target_ids.append(target_id)
+                
+                self.frame_pointer += self.seq_length
+
+                d.append(self.dataset_pointer)
+                i += 1
+
+            else:
+                # Not enough frames left
+                # Increment the dataset pointer and set the frame_pointer to zero
+                self.tick_batch_pointer(valid=False)
+        
+        return x_batch, y_batch, d, numPedsList_batch, PedsList_batch, target_ids
+
+    def next_valid_batch(self):
+        '''
+        Function to get the next Validation batch of points
+        '''
+        # Source data
+        x_batch = []
+        # Target data
+        y_batch = []
+        # Dataset data
+        d = []
+
+        # pedlist per sequence
+        numPedsList_batch = []
+
+         # pedlist per sequence
+        PedsList_batch = []
+        target_ids = []
+
+        # Iteration index
+        i = 0
+        while i < self.batch_size:
+            # Extract the frame data of the current dataset
+            frame_data = self.valid_data[self.valid_dataset_pointer]
+            numPedsList = self.valid_numPedsList[self.valid_dataset_pointer]
+            pedsList = self.valid_pedsList[self.valid_dataset_pointer]
+
+            # Get the frame pointer for the current dataset
+            idx = self.valid_frame_pointer
+            # While there is still seq_length number of frames left in the current dataset
+            if idx + self.seq_length < len(frame_data):
+                # All the data in this sequence
+                # seq_frame_data = frame_data[idx:idx+self.seq_length+1]
+                seq_source_frame_data = frame_data[idx:idx+self.seq_length]
+                seq_numPedsList=numPedsList[idx:idx+self.seq_length]
+                seq_PedsList = pedsList[idx:idx+self.seq_length]
+                seq_target_frame_data = frame_data[idx+1:idx+self.seq_length+1]
+
+                # Number of unique peds in this sequence of frames
+                x_batch.append(seq_source_frame_data)
+                y_batch.append(seq_target_frame_data)
+                numPedsList_batch.append(seq_numPedsList)
+                PedsList_batch.append(seq_PedsList)
+                
+                # get correct target ped id for the sequence - ROOT CAUSE FIX
+                raw_target_id = self.target_ids[self.dataset_pointer][math.floor((self.valid_frame_pointer)/self.seq_length)]
+                if isinstance(raw_target_id, (list, np.ndarray)):
+                    target_id = int(raw_target_id[0]) if len(raw_target_id) > 0 else 0
+                elif hasattr(raw_target_id, 'item'):
+                    target_id = int(raw_target_id.item())
+                else:
+                    target_id = int(raw_target_id)
+                target_ids.append(target_id)
+                
+                self.valid_frame_pointer += self.seq_length
+
+                d.append(self.valid_dataset_pointer)
+                i += 1
+
+            else:
+                # Not enough frames left
+                # Increment the dataset pointer and set the frame_pointer to zero
+                self.tick_batch_pointer(valid=True)
+
+        return x_batch, y_batch, d, numPedsList_batch, PedsList_batch, target_ids
+
+    def tick_batch_pointer(self, valid=False):
+        '''
+        Advance the dataset pointer
+        '''
+        
+        if not valid:
+            
+            # Go to the next dataset
+            self.dataset_pointer += 1
+            # Set the frame pointer to zero for the current dataset
+            self.frame_pointer = 0
+            # If all datasets are done, then go to the first one again
+            if self.dataset_pointer >= len(self.data):
+                self.dataset_pointer = 0
+            print("*******************")
+            print("now processing: %s"% self.get_file_name())
+        else:
+            # Go to the next dataset
+            self.valid_dataset_pointer += 1
+            # Set the frame pointer to zero for the current dataset
+            self.valid_frame_pointer = 0
+            # If all datasets are done, then go to the first one again
+            if self.valid_dataset_pointer >= len(self.valid_data):
+                self.valid_dataset_pointer = 0
+            print("*******************")
+            print("now processing: %s"% self.get_file_name(pointer_type = 'valid'))
+
+    def reset_batch_pointer(self, valid=False):
+        '''
+        Reset all pointers
+        '''
+        if not valid:
+            # Go to the first frame of the first dataset
+            self.dataset_pointer = 0
+            self.frame_pointer = 0
+        else:
+            self.valid_dataset_pointer = 0
+            self.valid_frame_pointer = 0
+
+    def switch_to_dataset_type(self, train = False, load_data = True):
+        # function for switching between train and validation datasets during training session
+        print('--------------------------------------------------------------------------')
+        if not train: # if train mode, switch to validation mode
+            if self.additional_validation:
+                print("Dataset type switching: training ----> validation")
+                self.orig_seq_lenght, self.seq_length = self.seq_length, self.orig_seq_lenght
+                self.data_dirs = self.validation_dataset
+                self.numDatasets = len(self.data_dirs)
+                if load_data:
+                    self.load_preprocessed(self.data_file_vl, True)
+                    self.reset_batch_pointer(valid=False)
+            else: 
+                print("There is no validation dataset.Aborted.")
+                return
+        else:# if validation mode, switch to train mode
+            print("Dataset type switching: validation -----> training")
+            self.orig_seq_lenght, self.seq_length = self.seq_length, self.orig_seq_lenght
+            self.data_dirs = self.train_dataset
+            self.numDatasets = len(self.data_dirs)
+            if load_data:
+                self.load_preprocessed(self.data_file_tr)
+                self.reset_batch_pointer(valid=False)
+                self.reset_batch_pointer(valid=True)
+
+    def convert_proper_array(self, x_seq, num_pedlist, pedlist):
+        #converter function to appropriate format. Instead of direcly use ped ids, we are mapping ped ids to
+        #array indices using a lookup table for each sequence -> speed
+        #output: seq_lenght (real sequence lenght+1)*max_ped_id+1 (biggest id number in the sequence)*2 (x,y)
+        
+        #get unique ids from sequence
+        # numpy配列に変換してからuniqueを適用
+        all_ids = []
+        for frame_peds in pedlist:
+            all_ids.extend(frame_peds)
+        unique_ids = np.unique(np.array(all_ids)).astype(int)
+        
+        # create a lookup table which maps ped ids -> array indices
+        # キーをPythonのintに統一
+        lookup_table = {int(pid): idx for idx, pid in enumerate(unique_ids)}
+
+        seq_data = np.zeros(shape=(self.seq_length, len(lookup_table), 2))
+
+        # create new structure of array
+        for ind, frame in enumerate(x_seq):
+            if len(frame) > 0:  # フレームが空でない場合のみ処理
+                # ped_idを確実にintに変換
+                ped_ids = [int(float(x)) for x in frame[:, 0]]
+                corr_index = [lookup_table[x] for x in ped_ids if x in lookup_table]
+                if corr_index:  # インデックスが存在する場合のみ
+                    seq_data[ind, corr_index, :] = frame[:len(corr_index), 1:3]
+
+        return_arr = Variable(torch.from_numpy(np.array(seq_data)).float())
+
+        return return_arr, lookup_table
+
+    def add_element_to_dict(self, dict, key, value):
+        # helper function to add a element to dictionary
+        dict.setdefault(key, [])
+        dict[key].append(value)
+
+    def get_dataset_path(self, base_path, f_prefix):
+        # get all datasets from given set of directories
+        dataset = []
+        dir_names = unique_list(self.get_all_directory_namelist())
+        for dir_ in dir_names:
+            dir_path = os.path.join(f_prefix, base_path, dir_)
+            file_names = get_all_file_names(dir_path)
+            [dataset.append(os.path.join(dir_path, file_name)) for file_name in file_names]
+        return dataset
+
+    def get_file_name(self, offset=0, pointer_type = 'train'):
+        #return file name of processing or pointing by dataset pointer
+        if pointer_type == 'train':
+            return self.data_dirs[self.dataset_pointer+offset].split('/')[-1]
+         
+        elif pointer_type == 'valid':
+            return self.data_dirs[self.valid_dataset_pointer+offset].split('/')[-1]
+
+    def create_folder_file_dict(self):
+        # create a helper dictionary folder name:file name
+        self.folder_file_dict = {}
+        for dir_ in self.base_data_dirs:
+            folder_name = dir_.split('/')[-2]
+            file_name = dir_.split('/')[-1]
+            self.add_element_to_dict(self.folder_file_dict, folder_name, file_name)
+
+    def get_directory_name(self, offset=0):
+        #return folder name of file of processing or pointing by dataset pointer
+        folder_name = self.data_dirs[self.dataset_pointer+offset].split('/')[-2]
+        return folder_name
+
+    def get_directory_name_with_pointer(self, pointer_index):
+        # get directory name using pointer index
+        folder_name = self.data_dirs[pointer_index].split('/')[-2]
+        return folder_name
+
+    def get_all_directory_namelist(self):
+        #return all directory names in this collection of dataset
+        folder_list = [data_dir.split('/')[-2] for data_dir in (self.base_data_dirs)]
+        return folder_list
+
+    def get_file_path(self, base, prefix, model_name ='', offset=0):
+        #return file path of file of processing or pointing by dataset pointer
+        folder_name = self.data_dirs[self.dataset_pointer+offset].split('/')[-2]
+        base_folder_name=os.path.join(prefix, base, model_name, folder_name)
+        return base_folder_name
+
+    def get_base_file_name(self, key):
+        # return file name using folder- file dictionary
+        return self.folder_file_dict[key]
+
+    def get_len_of_dataset(self):
+        # return the number of dataset in the mode
+        return len(self.data)
+
+    def clean_test_data(self, x_seq, target_id, obs_lenght, predicted_lenght):
+        """
+        remove (pedid, x , y) array if x or y is nan for each frame in observed part (for test mode)
+        """
+        # target_idが配列の場合は最初の要素を取得
+        if isinstance(target_id, (list, np.ndarray)):
+            target_id = target_id[0] if len(target_id) > 0 else 0
+        elif hasattr(target_id, 'item'):  # numpy scalar の場合
+            target_id = target_id.item()
+        
+        # 確実にスカラー値にする
+        target_id = int(target_id)
+        
+        # observed part (観測部分) のNaN要素を除去
+        for frame_num in range(obs_lenght):
+            if len(x_seq[frame_num]) > 0:  # フレームにデータがある場合のみ処理
+                nan_elements_index = np.where(np.isnan(x_seq[frame_num][:, 2]))
+                try:
+                    x_seq[frame_num] = np.delete(x_seq[frame_num], nan_elements_index[0], axis=0)
+                except ValueError:
+                    print(f"Error occurred at frame {frame_num} in observed part")
+                    pass
+
+        # predicted part (予測部分) でtarget_id以外を除去
+        for frame_num in range(obs_lenght, obs_lenght + predicted_lenght):
+            if len(x_seq[frame_num]) > 0:  # フレームにデータがある場合のみ処理
+                # target_idと一致しない要素のインデックスを取得
+                non_target_mask = x_seq[frame_num][:, 0] != target_id
+                try:
+                    # target_id以外の要素を除去
+                    x_seq[frame_num] = x_seq[frame_num][~non_target_mask]
+                except ValueError:
+                    print(f"Error occurred at frame {frame_num} in predicted part")
+                    pass
+
+    def clean_ped_list(self, x_seq, pedlist_seq, target_id, obs_lenght, predicted_lenght):
+        # remove peds from pedlist after test cleaning
+        target_id_arr = [target_id]
+        for frame_num in range(obs_lenght+predicted_lenght):
+            pedlist_seq[frame_num] = x_seq[frame_num][:,0]
+
+    def write_to_file(self, data, base, f_prefix, model_name):
+        # write all files as txt format
+        self.reset_batch_pointer()
+        for file in range(self.numDatasets):
+            path = self.get_file_path(f_prefix, base, model_name, file)
+            file_name = self.get_file_name(file)
+            self.write_dataset(data[file], file_name, path)
+
+    def write_dataset(self, dataset_seq, file_name, path):
+        # write a file in txt format
+        print("Writing to file  path: %s, file_name: %s"%(path, file_name))
+        out = np.concatenate(dataset_seq, axis = 0)
+        np.savetxt(os.path.join(path, file_name), out, fmt = "%1d %1.1f %.3f %.3f", newline='\n')
+
+    def write_to_plot_file(self, data, path):
+        # write plot file for further visualization in pkl format
+        self.reset_batch_pointer()
+        for file in range(self.numDatasets):
+            file_name = self.get_file_name(file)
+            file_name = file_name.split('.')[0] + '.pkl'
+            print("Writing to plot file  path: %s, file_name: %s"%(path, file_name))
+            with open(os.path.join(path, file_name), 'wb') as f:
+                pickle.dump(data[file], f)
+
+    def get_frame_sequence(self, frame_lenght):
+        #begin and end of predicted fram numbers in this seq.
+        begin_fr = (self.frame_pointer - frame_lenght)
+        end_fr = (self.frame_pointer)
+        frame_number = self.orig_data[self.dataset_pointer][begin_fr:end_fr, 0].transpose()
+        return frame_number
+
+    def get_id_sequence(self, frame_lenght):
+        #begin and end of predicted fram numbers in this seq.
+        begin_fr = (self.frame_pointer - frame_lenght)
+        end_fr = (self.frame_pointer)
+        id_number = self.orig_data[self.dataset_pointer][begin_fr:end_fr, 1].transpose()
+        id_number = [int(i) for i in id_number]
+        return id_number
+
+    def get_dataset_dimension(self, file_name):
+        # return dataset dimension using dataset file name
+        return self.dataset_dimensions[file_name]
