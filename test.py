@@ -8,8 +8,7 @@ from torch.autograd import Variable
 import numpy as np
 from utils import DataLoader
 from helper import getCoef, sample_gaussian_2d, get_mean_error, get_final_error
-from helper import *
-from grid import getSequenceGridMask, getGridMask
+from helper import * # Assuming submission_preprocess, result_preprocess, save_submission_file, save_plot_file are here
 
 # デバイス設定
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -286,10 +285,10 @@ def main():
             # submission_preprocess and result_preprocess need to be defined or imported
             # Assuming submission_preprocess and result_preprocess are available from helper.py or similar
             # If not, these lines will cause errors and need to be implemented or removed based on your project structure.
-            # submission_data = submission_preprocess(dataloader, ret_x_seq.data.cpu().numpy(), sample_args.pred_length, sample_args.obs_length, target_id)
-            # iteration_submission.append(submission_data)
-            # result_data = result_preprocess(dataloader, ret_x_seq.data.cpu().numpy(), orig_x_seq.data.cpu().numpy(), sample_args.pred_length, sample_args.obs_length, target_id)
-            # iteration_result.append(result_data)
+            submission_data = submission_preprocess(dataloader, ret_x_seq.data.cpu().numpy(), sample_args.pred_length, sample_args.obs_length, target_id)
+            iteration_submission.append(submission_data)
+            result_data = result_preprocess(dataloader, ret_x_seq.data.cpu().numpy(), orig_x_seq.data.cpu().numpy(), sample_args.pred_length, sample_args.obs_length, target_id)
+            iteration_result.append(result_data)
 
         # Calculate average errors for the iteration
         if num_batches_processed > 0:
@@ -317,8 +316,8 @@ def main():
     # This part assumes submission_store and result_store are populated correctly.
     # If submission_preprocess and result_preprocess were commented out, these will be empty.
     # Ensure these functions are implemented and correctly populate the stores if you need this output.
-    # save_submission_file(submission_store, result_directory, model_name, dataloader.get_all_directory_namelist())
-    # save_plot_file(result_store, plot_directory, plot_test_file_directory, dataloader.get_all_directory_namelist())
+    save_submission_file(submission_store, result_directory, model_name, dataloader.get_all_directory_namelist())
+    save_plot_file(result_store, plot_directory, plot_test_file_directory, dataloader.get_all_directory_namelist())
 
     print("テスト完了:", time.time() - start_time, "秒") # Assuming start_time is defined at the beginning of main()
 
@@ -329,5 +328,3 @@ if __name__ == '__main__':
     # Define total_start_time at the very beginning of script execution
     total_start_time = time.time()
     main()
-
-
