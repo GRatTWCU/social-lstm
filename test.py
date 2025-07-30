@@ -138,6 +138,7 @@ def main():
                 target_id = target_id.item()
             elif isinstance(target_id, (np.floating, np.integer)):
                 target_id = target_id.item()
+            
             target_id = int(float(target_id))
             
             dataloader.clean_test_data(x_seq, target_id, sample_args.obs_length, sample_args.pred_length)
