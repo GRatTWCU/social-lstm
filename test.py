@@ -110,7 +110,7 @@ def main():
             print(f"ERROR: {message}")
 
     # テストモードでDataLoaderを作成（訓練データの前処理をスキップ）
-    dataloader = DataLoader(sample_args, DummyLogger(), test_mode=True)
+    DataLoader(f_prefix, args.batch_size, args.seq_length, args.num_validation, forcePreProcess=True)
     
     # テスト用データを読み込む
     test_data_file = os.path.join(sample_args.data_dir, sample_args.dataset, 'test.txt')
