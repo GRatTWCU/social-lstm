@@ -92,6 +92,16 @@ def main():
     parser.add_argument('--grid', action="store_true", default=True,
                         help='Whether store grids and use further epoch')
     
+    # DataLoaderに必要な追加引数
+    parser.add_argument('--data_dir', type=str, default='./data',
+                        help='Data directory')
+    parser.add_argument('--dataset', type=str, default='eth',
+                        help='Dataset name')
+    parser.add_argument('--class_balance', type=int, default=-1,
+                        help='Class balance parameter')
+    parser.add_argument('--force_preprocessing', action="store_true", default=False,
+                        help='Force preprocessing')
+    
     args = parser.parse_args()
     
     train(args)
