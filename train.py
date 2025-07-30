@@ -20,8 +20,6 @@ from contextlib import redirect_stdout
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-# train.pyのmain関数内、argparserの修正
-
 def main():
     parser = argparse.ArgumentParser()
     # RNN size parameter (dimension of the output/hidden state)
@@ -94,16 +92,6 @@ def main():
     parser.add_argument('--grid', action="store_true", default=True,
                         help='Whether store grids and use further epoch')
     
-    # DataLoaderに必要な追加の引数
-    parser.add_argument('--data_dir', type=str, default='./data',
-                        help='Data directory')
-    parser.add_argument('--dataset', type=str, default='eth',
-                        help='Dataset name')
-    parser.add_argument('--class_balance', type=int, default=-1,
-                        help='Class balance parameter')
-    parser.add_argument('--force_preprocessing', action="store_true", default=False,
-                        help='Force preprocessing')
-    
     args = parser.parse_args()
     
     train(args)
@@ -129,29 +117,9 @@ def train(args):
     if validation_epoch_list:  # リストが空でないことを確認
         validation_epoch_list[-1] -= 1
 
-    # DataLoaderに必要な属性がない場合はデフォルト値を設定
-    if not hasattr(args, 'data_dir'):
-        args.data_dir = f_prefix + '/data'
-    if not hasattr(args, 'dataset'):
-        args.dataset = 'eth'  # デフォルトデータセット
-    if not hasattr(args, 'class_balance'):
-        args.class_balance = -1
-    if not hasattr(args, 'force_preprocessing'):
-        args.force_preprocessing = True
-
-    # 簡単なロガークラス
-    class SimpleLogger:
-        def info(self, message):
-            print(f"INFO: {message}")
-        def warning(self, message):
-            print(f"WARNING: {message}")
-        def error(self, message):
-            print(f"ERROR: {message}")
-
     # Create the data loader object. This object would preprocess the data in terms of
     # batches each of size args.batch_size, of length args.seq_length
-    # sample_args を args に修正
-    dataloader = DataLoader(args, SimpleLogger())
+    dataloader = DataLoader(f_prefix, args.batch_size, args.seq_length, args.num_validation, forcePreProcess=True)
 
     model_name = "LSTM"
     method_name = "SOCIALLSTM"
@@ -209,8 +177,6 @@ def train(args):
     dataset_pointer_ins_grid = -1
 
     [grids.append([]) for dataset in range(dataloader.get_len_of_dataset())]
-
-    # 以下は元のtraining loopが続きます...
 
     # Training
     for epoch in range(args.num_epochs):
@@ -324,7 +290,7 @@ def train(args):
 
         loss_epoch /= dataloader.num_batches
         # Log loss values
-        log_file_curve.write("Training epoch: "+str(epoch)+" loss: "+str(loss_epoch)+'\n')
+        log_file_curve.write("Training epoch: "+str(epoch)+" loss: "+str(loss_epoch)+'¥n')
 
         # Validation with training data
         if dataloader.valid_num_batches > 0:
@@ -429,7 +395,7 @@ def train(args):
                 if epoch % 10 == 0:
                     print('(epoch {}), valid_loss = {:.3f}, valid_err = {:.3f}'.format(epoch, loss_epoch_val, err_epoch))
                 print('Best epoch', best_epoch_val, 'Best validation loss', best_val_loss, 'Best error epoch', best_err_epoch_val, 'Best error', smallest_err_val)
-                log_file_curve.write("Validation epoch: "+str(epoch)+" loss: "+str(loss_epoch_val)+" err: "+str(err_epoch)+'\n')
+                log_file_curve.write("Validation epoch: "+str(epoch)+" loss: "+str(loss_epoch_val)+" err: "+str(err_epoch)+'¥n')
 
         # Validation dataset
         if dataloader.additional_validation and epoch in validation_epoch_list:
@@ -564,7 +530,7 @@ def train(args):
                 if epoch % 10 == 0:
                     print('(epoch {}), valid_loss = {:.3f}, ADE= {:.3f}, FDE = {:.3f}'.format(epoch, loss_epoch_val_data, err_epoch, f_err_epoch))
                 print('Best epoch', best_epoch_val_data, 'Best validation loss', best_val_data_loss, 'Best error epoch', best_err_epoch_val_data, 'Best error', smallest_err_val_data)
-                log_file_curve.write("Validation dataset epoch: "+str(epoch)+" loss: "+str(loss_epoch_val_data)+" mean_err: "+str(err_epoch)+' final_err: '+str(f_err_epoch)+'\n')
+                log_file_curve.write("Validation dataset epoch: "+str(epoch)+" loss: "+str(loss_epoch_val_data)+" mean_err: "+str(err_epoch)+' final_err: '+str(f_err_epoch)+'¥n')
 
             optimizer = time_lr_scheduler(optimizer, epoch, lr_decay_epoch=args.freq_optimizer)
 
@@ -583,7 +549,7 @@ def train(args):
 
     if dataloader.additional_validation:
         print('Best epoch according to validation dataset', best_epoch_val_data, 'Best validation Loss', best_val_data_loss, 'Best error epoch', best_err_epoch_val_data, 'Best error', smallest_err_val_data)
-        log_file.write("Validation dataset Best epoch: "+str(best_epoch_val_data)+','+' Best validation Loss: '+str(best_val_data_loss)+'\n')
+        log_file.write("Validation dataset Best epoch: "+str(best_epoch_val_data)+','+' Best validation Loss: '+str(best_val_data_loss)+'¥n')
 
     if validation_dataset_executed:
         dataloader.switch_to_dataset_type(load_data=False)
