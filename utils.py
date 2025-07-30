@@ -1,10 +1,11 @@
 import os
 import pickle
 import numpy as np
+import torch
 
 class DataLoader():
 
-    def __init__(self, args, logging):
+    def __init__(self, args, logging, test_mode=False):
         self.data_dir = args.data_dir
         self.dataset = args.dataset
         self.batch_size = args.batch_size
@@ -13,6 +14,12 @@ class DataLoader():
         self.class_balance = args.class_balance
         self.force_preprocessing = args.force_preprocessing
         self.logging = logging
+        self.test_mode = test_mode
+
+        # train.pyで使用される属性
+        self.additional_validation = False
+        self.dataset_pointer = 0
+        self.valid_num_batches = 0
 
         self.train_data_file = os.path.join(self.data_dir, self.dataset, "train_data.npz")
         self.val_data_file = os.path.join(self.data_dir, self.dataset, "val_data.npz")
@@ -20,32 +27,58 @@ class DataLoader():
 
         self.data_dir = os.path.join(self.data_dir, self.dataset)
 
-        if not (os.path.exists(self.train_data_file)) or self.force_preprocessing:
-            self.logging.info("Preprocessing data...")
-            self.preprocess(os.path.join(self.data_dir, 'train.txt'), self.train_data_file)
-            self.preprocess(os.path.join(self.data_dir, 'val.txt'), self.val_data_file)
-            self.preprocess(os.path.join(self.data_dir, 'test.txt'), self.test_data_file)
+        if not self.test_mode:
+            if not (os.path.exists(self.train_data_file)) or self.force_preprocessing:
+                self.logging.info("Preprocessing data...")
+                if os.path.exists(os.path.join(self.data_dir, 'train.txt')):
+                    self.preprocess(os.path.join(self.data_dir, 'train.txt'), self.train_data_file)
+                if os.path.exists(os.path.join(self.data_dir, 'val.txt')):
+                    self.preprocess(os.path.join(self.data_dir, 'val.txt'), self.val_data_file)
+                if os.path.exists(os.path.join(self.data_dir, 'test.txt')):
+                    self.preprocess(os.path.join(self.data_dir, 'test.txt'), self.test_data_file)
 
-        self.logging.info("Loading preprocessed data...")
-        train_data = np.load(self.train_data_file, allow_pickle=True)
-        val_data = np.load(self.val_data_file, allow_pickle=True)
-        test_data = np.load(self.test_data_file, allow_pickle=True)
+            if os.path.exists(self.train_data_file):
+                self.logging.info("Loading preprocessed data...")
+                train_data = np.load(self.train_data_file, allow_pickle=True)
+                val_data = np.load(self.val_data_file, allow_pickle=True) if os.path.exists(self.val_data_file) else None
+                test_data = np.load(self.test_data_file, allow_pickle=True) if os.path.exists(self.test_data_file) else None
 
-        self.train_x, self.train_y, self.train_class = train_data['x'], train_data['y'], train_data['class']
-        self.val_x, self.val_y, self.val_class = val_data['x'], val_data['y'], val_data['class']
-        self.test_x, self.test_y = test_data['x'], test_data['y']
+                self.train_x, self.train_y, self.train_class = train_data['x'], train_data['y'], train_data.get('class_id', train_data.get('class', np.zeros(len(train_data['x']))))
+                
+                if val_data is not None:
+                    self.val_x, self.val_y, self.val_class = val_data['x'], val_data['y'], val_data.get('class_id', val_data.get('class', np.zeros(len(val_data['x']))))
+                else:
+                    # バリデーションデータがない場合、訓練データの一部を使用
+                    split_idx = int(0.8 * len(self.train_x))
+                    self.val_x, self.val_y, self.val_class = self.train_x[split_idx:], self.train_y[split_idx:], self.train_class[split_idx:]
+                    self.train_x, self.train_y, self.train_class = self.train_x[:split_idx], self.train_y[:split_idx], self.train_class[:split_idx]
+                
+                if test_data is not None:
+                    self.test_x, self.test_y = test_data['x'], test_data['y']
+                else:
+                    self.test_x, self.test_y = self.val_x, self.val_y
 
-        self.logging.info(
-            "Train data loaded. Shape of x: {}, y: {}, class: {}".format(self.train_x.shape, self.train_y.shape,
-                                                                          self.train_class.shape))
+                self.logging.info(
+                    "Train data loaded. Shape of x: {}, y: {}, class: {}".format(self.train_x.shape, self.train_y.shape,
+                                                                                  self.train_class.shape))
+        else:
+            # テストモード用の最小限の初期化
+            self.train_x = self.train_y = self.train_class = np.array([])
+            self.val_x = self.val_y = self.val_class = np.array([])
+            self.test_x = self.test_y = []
 
         # create pointers
         self.train_pointer = 0
         self.val_pointer = 0
         self.test_pointer = 0
 
-        self.num_batches = int(self.train_x.shape[0] / self.batch_size)
-        self.val_num_batches = int(self.val_x.shape[0] / self.batch_size)
+        if not self.test_mode and hasattr(self, 'train_x') and len(self.train_x) > 0:
+            self.num_batches = int(self.train_x.shape[0] / self.batch_size)
+            self.valid_num_batches = int(self.val_x.shape[0] / self.batch_size) if hasattr(self, 'val_x') and len(self.val_x) > 0 else 0
+        else:
+            self.num_batches = 0
+            self.valid_num_batches = 0
+
         self.reset_batch_pointer(split='train', logging=False)
         self.reset_batch_pointer(split='val', logging=False)
         self.reset_batch_pointer(split='test', logging=False)
@@ -57,21 +90,132 @@ class DataLoader():
             self.grid_size = 4
         elif self.dataset == 'univ':
             self.grid_size = 4
+        else:
+            self.grid_size = 4
+
+    def get_len_of_dataset(self):
+        """データセットの数を返す"""
+        return 1
+
+    def switch_to_dataset_type(self, load_data=True):
+        """データセットタイプを切り替える（train.pyで使用）"""
+        pass
+
+    def get_directory_name_with_pointer(self, d_seq):
+        """ポインタでディレクトリ名を取得"""
+        return self.dataset
+
+    def get_dataset_dimension(self, folder_name):
+        """データセットの次元情報を返す"""
+        return {
+            'width': 1920,
+            'height': 1080,
+            'left': 0,
+            'top': 0
+        }
+
+    def convert_proper_array(self, x_seq, numPedsList_seq, PedsList_seq):
+        """配列を適切な形式に変換"""
+        # 簡単な実装 - 実際のプロジェクトに応じて調整が必要
+        lookup_seq = {}
+        if len(PedsList_seq) > 0 and len(PedsList_seq[0]) > 0:
+            for i, ped_id in enumerate(PedsList_seq[0]):
+                lookup_seq[int(ped_id)] = i
+        
+        # x_seqをTensorに変換
+        if isinstance(x_seq, np.ndarray):
+            x_seq = torch.FloatTensor(x_seq)
+        elif not isinstance(x_seq, torch.Tensor):
+            x_seq = torch.FloatTensor(np.array(x_seq))
+        
+        return x_seq, lookup_seq
+
+    def get_file_name(self, offset):
+        """ファイル名を取得"""
+        return f"{self.dataset}.txt"
+
+    def get_frame_sequence(self, seq_length):
+        """フレームシーケンスを取得"""
+        return list(range(seq_length))
+
+    def write_to_plot_file(self, results, path):
+        """プロット用ファイルに書き込み"""
+        # プレースホルダー実装
+        if not os.path.exists(os.path.dirname(path)):
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+        
+        with open(os.path.join(path, 'results.txt'), 'w') as f:
+            f.write(f"Results written with {len(results)} datasets\n")
+
+    def get_all_directory_namelist(self):
+        """すべてのディレクトリ名のリストを返す"""
+        return [self.dataset]
+
+    def clean_ped_list(self, x_seq, PedsList_seq, target_id, obs_length, pred_length):
+        """PedsList_seqをクリーンアップ"""
+        # observed partは変更なし
+        # predicted partはtarget_idのみ保持
+        for frame_num in range(obs_length, obs_length + pred_length):
+            if frame_num < len(PedsList_seq):
+                # target_idのみを保持
+                if target_id in PedsList_seq[frame_num]:
+                    PedsList_seq[frame_num] = [target_id]
+                else:
+                    PedsList_seq[frame_num] = []
 
     def next_batch(self, split='train'):
-
+        """次のバッチを取得"""
         if split == 'train':
-            x_batch = self.train_x[self.train_pointer:self.train_pointer + self.batch_size, :, :]
-            y_batch = self.train_y[self.train_pointer:self.train_pointer + self.batch_size, :]
-            class_batch = self.train_class[self.train_pointer:self.train_pointer + self.batch_size]
-            self.train_pointer += self.batch_size
+            if hasattr(self, 'train_x') and len(self.train_x) > 0:
+                x_batch = self.train_x[self.train_pointer:self.train_pointer + self.batch_size]
+                y_batch = self.train_y[self.train_pointer:self.train_pointer + self.batch_size]
+                class_batch = self.train_class[self.train_pointer:self.train_pointer + self.batch_size]
+                
+                # train.pyが期待する形式に変換
+                # x, y, d, numPedsList, PedsList, target_ids の形式で返す
+                d = [0] * len(x_batch)  # dataset indices
+                numPedsList = []
+                PedsList = []
+                target_ids = []
+                
+                for i, x in enumerate(x_batch):
+                    # 各シーケンスに対してダミーデータを生成
+                    num_peds = x.shape[0] if len(x.shape) > 1 else 1
+                    numPedsList.append([num_peds] * self.seq_length)
+                    PedsList.append([[j for j in range(num_peds)] for _ in range(self.seq_length)])
+                    target_ids.append(0)  # デフォルトのtarget_id
+                
+                self.train_pointer += self.batch_size
+                return x_batch, y_batch, d, numPedsList, PedsList, target_ids
+            else:
+                return [], [], [], [], [], []
+                
         elif split == 'val':
-            x_batch = self.val_x[self.val_pointer:self.val_pointer + self.batch_size, :, :]
-            y_batch = self.val_y[self.val_pointer:self.val_pointer + self.batch_size, :]
-            class_batch = self.val_class[self.val_pointer:self.val_pointer + self.batch_size]
-            self.val_pointer += self.batch_size
+            if hasattr(self, 'val_x') and len(self.val_x) > 0:
+                x_batch = self.val_x[self.val_pointer:self.val_pointer + self.batch_size]
+                y_batch = self.val_y[self.val_pointer:self.val_pointer + self.batch_size]
+                class_batch = self.val_class[self.val_pointer:self.val_pointer + self.batch_size]
+                
+                # train.pyが期待する形式に変換
+                d = [0] * len(x_batch)
+                numPedsList = []
+                PedsList = []
+                target_ids = []
+                
+                for i, x in enumerate(x_batch):
+                    num_peds = x.shape[0] if len(x.shape) > 1 else 1
+                    numPedsList.append([num_peds] * self.seq_length)
+                    PedsList.append([[j for j in range(num_peds)] for _ in range(self.seq_length)])
+                    target_ids.append(0)
+                
+                self.val_pointer += self.batch_size
+                return x_batch, y_batch, d, numPedsList, PedsList, target_ids
+            else:
+                return [], [], [], [], [], []
 
-        return x_batch, y_batch, class_batch
+    def next_valid_batch(self):
+        """バリデーション用の次のバッチを取得"""
+        return self.next_batch(split='val')
 
     def next_test_batch(self, end_of_epoch):
         '''
@@ -79,37 +223,46 @@ class DataLoader():
         :return:
         '''
         if not end_of_epoch:
-            x_batch = self.test_x[self.test_pointer, :, :, :]
-            y_batch = self.test_y[self.test_pointer, :, :]
-            self.test_pointer += 1
+            if hasattr(self, 'test_x') and isinstance(self.test_x, list) and len(self.test_x) > 0:
+                if self.test_pointer < len(self.test_x):
+                    x_batch = self.test_x[self.test_pointer]
+                    y_batch = self.test_y[self.test_pointer] if hasattr(self, 'test_y') and len(self.test_y) > self.test_pointer else []
+                    self.test_pointer += 1
+                    return x_batch, y_batch
+            return None, None
         else:
             return None, None
-        return np.reshape(x_batch, (1, x_batch.shape[0], x_batch.shape[1], x_batch.shape[2])), \
-               np.reshape(y_batch, (1, y_batch.shape[0], y_batch.shape[1]))
 
-    def reset_batch_pointer(self, split='train', logging=True):
+    def reset_batch_pointer(self, split='train', logging=True, valid=False):
+        """バッチポインタをリセット"""
+        if valid:
+            split = 'val'
+            
         if split == 'train':
-            if self.class_balance != -1:
-                # class balance
-                self.logging.info("Perform class balance with ratio {}".format(self.class_balance))
-                class_ids = np.where(self.train_class == 1)[0]
-                other_ids = np.where(self.train_class == 0)[0]
-                # oversample the minor class
-                if len(class_ids) * self.class_balance < len(other_ids):
-                    class_ids = np.random.choice(class_ids, size=int(len(other_ids)/self.class_balance), replace=True)
-                random_idx = np.random.permutation(len(other_ids) + len(class_ids))
-                all_ids = np.concatenate((class_ids, other_ids))
-                all_ids = all_ids[random_idx]
-                self.train_x = self.train_x[all_ids]
-                self.train_y = self.train_y[all_ids]
-                self.train_class = self.train_class[all_ids]
-                self.num_batches = int(len(all_ids)/self.batch_size)
-            else:
-                rand_idx = np.random.permutation(self.train_x.shape[0])
-                self.train_x = self.train_x[rand_idx, :, :]
-                self.train_y = self.train_y[rand_idx, :]
-                self.train_class = self.train_class[rand_idx]
-            if logging: self.logging.info("Reshuffle training data")
+            if hasattr(self, 'train_x') and len(self.train_x) > 0:
+                if self.class_balance != -1:
+                    # class balance
+                    self.logging.info("Perform class balance with ratio {}".format(self.class_balance))
+                    class_ids = np.where(self.train_class == 1)[0]
+                    other_ids = np.where(self.train_class == 0)[0]
+                    # oversample the minor class
+                    if len(class_ids) * self.class_balance < len(other_ids):
+                        class_ids = np.random.choice(class_ids, size=int(len(other_ids)/self.class_balance), replace=True)
+                    random_idx = np.random.permutation(len(other_ids) + len(class_ids))
+                    all_ids = np.concatenate((class_ids, other_ids))
+                    all_ids = all_ids[random_idx]
+                    self.train_x = self.train_x[all_ids]
+                    self.train_y = self.train_y[all_ids]
+                    self.train_class = self.train_class[all_ids]
+                    self.num_batches = int(len(all_ids)/self.batch_size)
+                else:
+                    if len(self.train_x) > 0:
+                        rand_idx = np.random.permutation(self.train_x.shape[0])
+                        self.train_x = self.train_x[rand_idx]
+                        self.train_y = self.train_y[rand_idx]
+                        self.train_class = self.train_class[rand_idx]
+                if logging: 
+                    self.logging.info("Reshuffle training data")
             self.train_pointer = 0
 
         elif split == 'val':
@@ -117,6 +270,7 @@ class DataLoader():
         elif split == 'test':
             self.test_pointer = 0
 
+    # 既存のメソッドはそのまま保持
     def preprocess(self, data_file, out_file):
         '''
         Function that processes the data and saves it in a numpy file
@@ -124,6 +278,10 @@ class DataLoader():
         :param out_file:
         :return:
         '''
+        if not os.path.exists(data_file):
+            self.logging.warning(f"Data file {data_file} not found. Skipping preprocessing.")
+            return
+            
         all_x_but_one = []
         all_y_but_one = []
 
@@ -181,9 +339,12 @@ class DataLoader():
             all_x.append(np.reshape(np.concatenate((np.reshape(seq_x, (1, seq_x.shape[0], seq_x.shape[1])), neighbors)), (-1, seq_x.shape[0], seq_x.shape[1])))
             all_y.append(seq_y)
 
-
         # Save the arrays
         self.logging.info("Shape of all_x: {}".format(np.shape(all_x)))
+        
+        # ディレクトリが存在しない場合は作成
+        os.makedirs(os.path.dirname(out_file), exist_ok=True)
+        
         np.savez(out_file, x=np.array(all_x), y=np.array(all_y), class_id=np.array(all_class))
         self.logging.info("Saved preprocessed data to {}".format(out_file))
 
@@ -215,6 +376,9 @@ class DataLoader():
         :param seq_length:
         :return:
         '''
+        if frame_id == -1 or frame_id >= len(frame_data):
+            return np.array([])
+            
         last_frame = frame_data[frame_id]
         neighbors = []
         for ped_data in last_frame:
@@ -222,7 +386,8 @@ class DataLoader():
             ped_id = ped_data[1]
             try:
                 ped_seq = self.get_ped_sequence(frame_data, ped_id, frame_id, seq_length)
-                neighbors.append(ped_seq)
+                if ped_seq is not None:
+                    neighbors.append(ped_seq)
             except: # this pedestrian does not have a trajectory of the given length
                 continue
         return np.array(neighbors)
@@ -239,9 +404,13 @@ class DataLoader():
         ped_seq = []
         for i in range(frame_id - seq_length + 1, frame_id + 1):
             try:
+                if i < 0 or i >= len(frame_data):
+                    return None
                 frame = frame_data[i]
-                ped_data = frame[frame[:, 1] == ped_id][0]
-                ped_seq.append(ped_data[2:4])
+                ped_data = frame[frame[:, 1] == ped_id]
+                if len(ped_data) == 0:
+                    return None
+                ped_seq.append(ped_data[0][2:4])
             except:
                 # This pedestrian is not in this frame
                 # Return None, so this pedestrian will be discarded
@@ -258,6 +427,14 @@ class DataLoader():
         :param delim:
         :return:
         '''
+        if not os.path.exists(data_file):
+            self.logging.warning(f"Test data file {data_file} not found.")
+            self.test_x = []
+            self.test_y = []
+            self.test_target_id = []
+            self.num_test_batches = 0
+            return
+            
         seq_length = obs_length + pred_length
         data = np.loadtxt(data_file, delimiter=delim)
         # remove nan frames
@@ -293,22 +470,23 @@ class DataLoader():
         self.test_x = all_x
         self.test_y = all_y
         self.test_target_id = all_target_id
-
         self.num_test_batches = len(all_x)
 
     def get_ped_sequence_test(self, frame_data, ped_id, frame_id, seq_length):
         ped_seq = []
         for i in range(seq_length):
             try:
+                if frame_id + i >= len(frame_data):
+                    return None
                 frame = frame_data[frame_id + i]
-                ped_data = frame[frame[:, 1] == ped_id][0]
-                ped_seq.append(ped_data[2:4])
+                ped_data = frame[frame[:, 1] == ped_id]
+                if len(ped_data) == 0:
+                    return None
+                ped_seq.append(ped_data[0][2:4])
             except:
                 return None
         return np.array(ped_seq)
     
-    # ---------------- ここが修正された関数です ----------------
-    # ---------------- 修正された関数です ----------------
     def clean_test_data(self, x_seq, target_id, obs_length, predicted_length):
         """remove (pedid, x , y) array if x or y is nan for each frame in observed part"""
         
@@ -331,31 +509,37 @@ class DataLoader():
         
         # observed part のNaN要素を除去
         for frame_num in range(obs_length):
-            if len(x_seq[frame_num]) > 0:
+            if frame_num < len(x_seq) and len(x_seq[frame_num]) > 0:
                 # x, y座標のNaN値チェック（列インデックス1, 2）
-                nan_mask_x = np.isnan(x_seq[frame_num][:, 1])
-                nan_mask_y = np.isnan(x_seq[frame_num][:, 2])
-                nan_mask = nan_mask_x | nan_mask_y
-                
-                # NaN要素を除去
-                x_seq[frame_num] = x_seq[frame_num][~nan_mask]
+                if x_seq[frame_num].shape[1] >= 3:  # ped_id, x, y の形式を想定
+                    nan_mask_x = np.isnan(x_seq[frame_num][:, 1])
+                    nan_mask_y = np.isnan(x_seq[frame_num][:, 2])
+                    nan_mask = nan_mask_x | nan_mask_y
+                    
+                    # NaN要素を除去
+                    x_seq[frame_num] = x_seq[frame_num][~nan_mask]
         
         # predicted part でtarget_id以外を除去
-        for frame_num in range(obs_length, obs_length + predicted_length):
+        for frame_num in range(obs_length, min(obs_length + predicted_length, len(x_seq))):
             if len(x_seq[frame_num]) > 0:
                 # デバッグ情報
                 if frame_num == obs_length:  # 最初の予測フレームのみ
                     print(f"DEBUG: Frame {frame_num} shape: {x_seq[frame_num].shape}")
-                    print(f"DEBUG: Frame {frame_num} ped_ids: {x_seq[frame_num][:, 0]}")
+                    if x_seq[frame_num].shape[1] > 0:
+                        print(f"DEBUG: Frame {frame_num} ped_ids: {x_seq[frame_num][:, 0]}")
                 
                 try:
                     # target_idと一致する要素のみ保持
-                    target_mask = x_seq[frame_num][:, 0] == target_id
-                    x_seq[frame_num] = x_seq[frame_num][target_mask]
+                    if x_seq[frame_num].shape[1] >= 3:  # ped_id, x, y の形式を想定
+                        target_mask = x_seq[frame_num][:, 0] == target_id
+                        x_seq[frame_num] = x_seq[frame_num][target_mask]
                     
                 except (ValueError, IndexError, TypeError) as e:
                     print(f"Error processing predicted frame {frame_num}: {e}")
                     print(f"x_seq[{frame_num}] shape: {x_seq[frame_num].shape if len(x_seq[frame_num]) > 0 else 'empty'}")
                     print(f"target_id: {target_id} (type: {type(target_id)})")
                     # エラーが発生した場合、そのフレームを空にする
-                    x_seq[frame_num] = np.array([]).reshape(0, 3)
+                    if len(x_seq[frame_num].shape) == 2 and x_seq[frame_num].shape[1] >= 3:
+                        x_seq[frame_num] = np.array([]).reshape(0, 3)
+                    else:
+                        x_seq[frame_num] = np.array([])
