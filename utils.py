@@ -309,37 +309,52 @@ class DataLoader():
     
     # ---------------- ここが修正された関数です ----------------
     def clean_test_data(self, x_seq, target_id, obs_length, predicted_length):
-        """
-        観測区間ではNaN座標を持つ歩行者を削除し、
-        予測区間ではtarget_id以外の歩行者を削除します。
-        """
-        
-        # まず、target_idが単一の整数であることを確認します。
-        if isinstance(target_id, (list, np.ndarray)):
-            target_id = target_id[0] if len(target_id) > 0 else -1
-        elif hasattr(target_id, 'item'):
-            target_id = target_id.item()
-        
-        try:
-            target_id = int(float(target_id))
-        except (ValueError, TypeError):
-            print(f"警告: target_id を整数に変換できませんでした: {target_id}")
-            target_id = -1 # 変換に失敗した場合は、エラーを示す値（-1）を設定します。
-
-        # --- 観測区間の修正 ---
-        # 観測区間（0からobs_length-1フレーム）では、座標がNaNの歩行者をすべて削除します。
-        for frame_num in range(obs_length):
-            if len(x_seq[frame_num]) > 0:
-                # 座標(x, y)のいずれかがNaNである行を特定するためのマスクを作成します。
-                # xはインデックス1, yはインデックス2にあります。
-                nan_mask = np.isnan(x_seq[frame_num][:, 1:3]).any(axis=1)
-                # NaNではない行だけを保持します。
-                x_seq[frame_num] = x_seq[frame_num][~nan_mask]
-
-        # --- 予測区間の修正 ---
-        # 予測区間（obs_length以降のフレーム）では、予測対象の歩行者（target_id）のみを残します。
-        for frame_num in range(obs_length, obs_length + predicted_length):
-            if len(x_seq[frame_num]) > 0 and target_id != -1:
-                # target_idと一致する行だけを保持するためのマスクを作成します。
+    """remove (pedid, x , y) array if x or y is nan for each frame in observed part"""
+    
+    # target_idを確実にスカラーに変換
+    if hasattr(target_id, '__iter__') and not isinstance(target_id, str):
+        if isinstance(target_id, (list, tuple)):
+            target_id = target_id[0] if len(target_id) > 0 else 0
+        elif isinstance(target_id, np.ndarray):
+            target_id = target_id.flat[0] if target_id.size > 0 else 0
+        else:
+            target_id = next(iter(target_id))
+    
+    if hasattr(target_id, 'item'):
+        target_id = target_id.item()
+    
+    # 確実にPythonのintに変換
+    target_id = int(float(target_id))
+    
+    print(f"DEBUG clean_test_data: target_id = {target_id} (type: {type(target_id)})")
+    
+    # observed part のNaN要素を除去
+    for frame_num in range(obs_length):
+        if len(x_seq[frame_num]) > 0:
+            # x, y座標のNaN値チェック（列インデックス1, 2）
+            nan_mask_x = np.isnan(x_seq[frame_num][:, 1])
+            nan_mask_y = np.isnan(x_seq[frame_num][:, 2])
+            nan_mask = nan_mask_x | nan_mask_y
+            
+            # NaN要素を除去
+            x_seq[frame_num] = x_seq[frame_num][~nan_mask]
+    
+    # predicted part でtarget_id以外を除去
+    for frame_num in range(obs_length, obs_length + predicted_length):
+        if len(x_seq[frame_num]) > 0:
+            # デバッグ情報
+            if frame_num == obs_length:  # 最初の予測フレームのみ
+                print(f"DEBUG: Frame {frame_num} shape: {x_seq[frame_num].shape}")
+                print(f"DEBUG: Frame {frame_num} ped_ids: {x_seq[frame_num][:, 0]}")
+            
+            try:
+                # target_idと一致する要素のみ保持
                 target_mask = x_seq[frame_num][:, 0] == target_id
                 x_seq[frame_num] = x_seq[frame_num][target_mask]
+                
+            except (ValueError, IndexError, TypeError) as e:
+                print(f"Error processing predicted frame {frame_num}: {e}")
+                print(f"x_seq[{frame_num}] shape: {x_seq[frame_num].shape if len(x_seq[frame_num]) > 0 else 'empty'}")
+                print(f"target_id: {target_id} (type: {type(target_id)})")
+                # エラーが発生した場合、そのフレームを空にする
+                x_seq[frame_num] = np.array([]).reshape(0, 3)
