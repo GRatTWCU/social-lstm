@@ -131,18 +131,46 @@ def main():
             # Get the sequence
             x_seq, d_seq, numPedsList_seq, PedsList_seq, target_id = x[0], d[0], numPedsList[0], PedsList[0], target_ids[0]
             
-            # target_idの型変換
-            if isinstance(target_id, (list, np.ndarray)):
-                target_id = target_id[0] if len(target_id) > 0 else 0
+            # target_idの型変換を確実に行う
+            print(f"Original target_id type: {type(target_id)}, value: {target_id}")
+            
+            # target_idが配列やリストの場合の処理
+            if isinstance(target_id, (list, tuple)):
+                if len(target_id) > 0:
+                    target_id = target_id[0]
+                else:
+                    print("Warning: Empty target_id list, skipping batch")
+                    continue
+            elif isinstance(target_id, np.ndarray):
+                if target_id.size > 0:
+                    target_id = target_id.flatten()[0]
+                else:
+                    print("Warning: Empty target_id array, skipping batch")
+                    continue
             elif hasattr(target_id, 'item'):
                 target_id = target_id.item()
-            elif isinstance(target_id, (np.floating, np.integer)):
-                target_id = target_id.item()
             
-            target_id = int(float(target_id))
+            # 最終的にスカラー値に変換
+            try:
+                if isinstance(target_id, (np.floating, np.integer)):
+                    target_id = float(target_id)
+                target_id = int(float(target_id))
+                print(f"Converted target_id: {target_id}")
+            except (ValueError, TypeError) as e:
+                print(f"Error converting target_id: {e}, skipping batch")
+                continue
             
-            dataloader.clean_test_data(x_seq, target_id, sample_args.obs_length, sample_args.pred_length)
-            dataloader.clean_ped_list(x_seq, PedsList_seq, target_id, sample_args.obs_length, sample_args.pred_length)
+            # データのクリーニング前にデバッグ情報を出力
+            print(f"x_seq shape: {x_seq.shape if hasattr(x_seq, 'shape') else 'No shape'}")
+            print(f"target_id: {target_id} (type: {type(target_id)})")
+            
+            try:
+                dataloader.clean_test_data(x_seq, target_id, sample_args.obs_length, sample_args.pred_length)
+                dataloader.clean_ped_list(x_seq, PedsList_seq, target_id, sample_args.obs_length, sample_args.pred_length)
+            except Exception as e:
+                print(f"Error in data cleaning: {e}")
+                print(f"Skipping batch {batch}")
+                continue
 
             # get processing file name and then get dimensions of file
             folder_name = dataloader.get_directory_name_with_pointer(d_seq)
@@ -157,8 +185,11 @@ def main():
             # target_idの存在確認
             if target_id not in lookup_seq:
                 if lookup_seq:
+                    print(f"Warning: target_id {target_id} not found in lookup_seq. Available keys: {list(lookup_seq.keys())}")
                     target_id = list(lookup_seq.keys())[0]
+                    print(f"Using first available target_id: {target_id}")
                 else:
+                    print("Warning: Empty lookup_seq, skipping batch")
                     continue
             
             # will be used for error calculation
