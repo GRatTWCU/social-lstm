@@ -109,7 +109,9 @@ def main():
 
 # train.py の修正箇所（122行目付近）
 
-def train(args):
+# train.py の修正箇所（134行目付近）
+
+def train(args):  # ← argsという名前で受け取っている
     origin = (0, 0)
     reference_point = (0, 1)
     validation_dataset_executed = False
@@ -126,20 +128,20 @@ def train(args):
 
     args.freq_validation = np.clip(args.freq_validation, 0, args.num_epochs)
     validation_epoch_list = list(range(args.freq_validation, args.num_epochs+1, args.freq_validation))
-    if validation_epoch_list:  # リストが空でないことを確認
+    if validation_epoch_list:
         validation_epoch_list[-1] -= 1
 
     # DataLoaderに必要な属性を追加
     if not hasattr(args, 'data_dir'):
         args.data_dir = f_prefix + '/data'
     if not hasattr(args, 'dataset'):
-        args.dataset = 'eth'  # デフォルトデータセット
+        args.dataset = 'eth'
     if not hasattr(args, 'class_balance'):
         args.class_balance = -1
     if not hasattr(args, 'force_preprocessing'):
         args.force_preprocessing = True
 
-    # 簡単なロガークラス
+    # ロガークラス（DummyLoggerをSimpleLoggerに統一）
     class SimpleLogger:
         def info(self, message):
             print(f"INFO: {message}")
@@ -148,9 +150,8 @@ def train(args):
         def error(self, message):
             print(f"ERROR: {message}")
 
-    # 古い呼び出し方法を新しい形式に変更
-    # 変更前: dataloader = DataLoader(f_prefix, args.batch_size, args.seq_length, args.num_validation, forcePreProcess=True)
-    # 変更後:
+    # Create the data loader object
+    # sample_args を args に修正
     dataloader = DataLoader(args, SimpleLogger())
 
     # 以下は元のコードと同じ...
