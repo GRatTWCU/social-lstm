@@ -211,9 +211,33 @@ def main():
             # ret_x_seq = rotate_traj_with_target_ped(ret_x_seq, -angle, PedsList_seq, lookup_seq)
             # ret_x_seq = translate(ret_x_seq, PedsList_seq, lookup_seq, -target_id_values)
             
-            # Record the mean and final displacement error
-            total_error += get_mean_error(ret_x_seq[1:sample_args.obs_length].data, orig_x_seq[1:sample_args.obs_length].data, PedsList_seq[1:sample_args.obs_length], PedsList_seq[1:sample_args.obs_length], sample_args.use_cuda, lookup_seq)
-            final_error += get_final_error(ret_x_seq[1:sample_args.obs_length].data, orig_x_seq[1:sample_args.obs_length].data, PedsList_seq[1:sample_args.obs_length], PedsList_seq[1:sample_args.obs_length], lookup_seq)
+            # Record the mean and final displacement error for PREDICTION part
+            # ADE: 予測部分（obs_length以降）の平均変位誤差
+            # FDE: 予測部分の最終時刻での変位誤差
+            pred_start = sample_args.obs_length
+            pred_end = sample_args.obs_length + sample_args.pred_length
+            
+            # 予測部分のADE計算
+            ade = get_mean_error(
+                ret_x_seq[pred_start:pred_end].data, 
+                orig_x_seq[pred_start:pred_end].data, 
+                PedsList_seq[pred_start:pred_end], 
+                PedsList_seq[pred_start:pred_end], 
+                sample_args.use_cuda, 
+                lookup_seq
+            )
+            
+            # 予測部分のFDE計算（最終時刻のみ）
+            fde = get_final_error(
+                ret_x_seq[pred_end-1:pred_end].data, 
+                orig_x_seq[pred_end-1:pred_end].data, 
+                PedsList_seq[pred_end-1:pred_end], 
+                PedsList_seq[pred_end-1:pred_end], 
+                lookup_seq
+            )
+            
+            total_error += ade
+            final_error += fde
 
             end = time.time()
 
@@ -244,8 +268,8 @@ def main():
             smallest_err_iter_num = iteration
             smallest_err = total_error
 
-        print('Iteration:', iteration+1, ' Total training (observed part) mean error of the model is ', total_error / dataloader.num_batches)
-        print('Iteration:', iteration+1, 'Total training (observed part) final error of the model is ', final_error / dataloader.num_batches)
+        print('Iteration:', iteration+1, ' ADE (prediction part) mean error: ', total_error / dataloader.num_batches)
+        print('Iteration:', iteration+1, ' FDE (prediction part) final error: ', final_error / dataloader.num_batches)
 
     print('Smallest error iteration:', smallest_err_iter_num+1)
     dataloader.write_to_file(submission_store[smallest_err_iter_num], result_directory, prefix, model_name)
