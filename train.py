@@ -20,6 +20,8 @@ from contextlib import redirect_stdout
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
+# train.pyのmain関数内、argparserの修正
+
 def main():
     parser = argparse.ArgumentParser()
     # RNN size parameter (dimension of the output/hidden state)
@@ -92,6 +94,16 @@ def main():
     parser.add_argument('--grid', action="store_true", default=True,
                         help='Whether store grids and use further epoch')
     
+    # DataLoaderに必要な追加の引数
+    parser.add_argument('--data_dir', type=str, default='./data',
+                        help='Data directory')
+    parser.add_argument('--dataset', type=str, default='eth',
+                        help='Dataset name')
+    parser.add_argument('--class_balance', type=int, default=-1,
+                        help='Class balance parameter')
+    parser.add_argument('--force_preprocessing', action="store_true", default=False,
+                        help='Force preprocessing')
+    
     args = parser.parse_args()
     
     train(args)
@@ -119,7 +131,7 @@ def train(args):
 
     # Create the data loader object. This object would preprocess the data in terms of
     # batches each of size args.batch_size, of length args.seq_length
-    dataloader = DataLoader(f_prefix, args.batch_size, args.seq_length, args.num_validation, forcePreProcess=True)
+    dataloader = DataLoader(sample_args, DummyLogger())
 
     model_name = "LSTM"
     method_name = "SOCIALLSTM"
