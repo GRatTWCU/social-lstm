@@ -40,7 +40,6 @@ def main():
     # Frequency at which the model should be saved parameter
     parser.add_argument('--save_every', type=int, default=400,
                         help='save frequency')
-    # TODO: (resolve) Clipping gradients for now. No idea whether we should
     # Gradient value at which it should be clipped
     parser.add_argument('--grad_clip', type=float, default=10.,
                         help='clip gradients at this value')
@@ -50,7 +49,6 @@ def main():
     # Decay rate for the learning rate parameter
     parser.add_argument('--decay_rate', type=float, default=0.95,
                         help='decay rate for rmsprop')
-    # Dropout not implemented.
     # Dropout probability parameter
     parser.add_argument('--dropout', type=float, default=0.5,
                         help='dropout probability')
@@ -120,11 +118,7 @@ def train(args):
 
     # Create the data loader object. This object would preprocess the data in terms of
     # batches each of size args.batch_size, of length args.seq_length
-    try:
-        dataloader = DataLoader(f_prefix, args.batch_size, args.seq_length, args.num_validation, forcePreProcess=True)
-    except TypeError:
-        # forcePreProcess引数が存在しない場合
-        dataloader = DataLoader(f_prefix, args.batch_size, args.seq_length, args.num_validation)
+    dataloader = DataLoader(f_prefix, args.batch_size, args.seq_length)
 
     model_name = "LSTM"
     method_name = "SOCIALLSTM"
@@ -162,21 +156,15 @@ def train(args):
     if args.use_cuda:
         net = net.to(device)
 
-    #optimizer = torch.optim.RMSprop(net.parameters(), lr=args.learning_rate)
     optimizer = torch.optim.Adagrad(net.parameters(), weight_decay=args.lambda_param)
-    #optimizer = torch.optim.Adam(net.parameters(), weight_decay=args.lambda_param)
-
     learning_rate = args.learning_rate
 
     best_val_loss = 100
     best_val_data_loss = 100
-
     smallest_err_val = 100000
     smallest_err_val_data = 100000
-
     best_epoch_val = 0
     best_epoch_val_data = 0
-
     best_err_epoch_val = 0
     best_err_epoch_val_data = 0
 
@@ -203,7 +191,7 @@ def train(args):
             x, y, d , numPedsList, PedsList ,target_ids= dataloader.next_batch()
             loss_batch = 0
             
-            #if we are in a new dataset, zero the counter of batch
+            # if we are in a new dataset, zero the counter of batch
             if dataset_pointer_ins_grid != dataloader.dataset_pointer and epoch != 0:
                 num_batch = 0
                 dataset_pointer_ins_grid = dataloader.dataset_pointer
@@ -221,11 +209,11 @@ def train(args):
                     target_id = target_id.item()
                 target_id = int(target_id)
 
-                #get processing file name and then get dimensions of file
+                # get processing file name and then get dimensions of file
                 folder_name = dataloader.get_directory_name_with_pointer(d_seq)
                 dataset_data = dataloader.get_dataset_dimension(folder_name)
 
-                #dense vector creation
+                # dense vector creation
                 x_seq, lookup_seq = dataloader.convert_proper_array(x_seq, numPedsList_seq, PedsList_seq)
                 
                 # target_idの存在確認
@@ -235,7 +223,7 @@ def train(args):
                     
                 target_id_values = x_seq[0][lookup_seq[target_id], 0:2]
 
-                #grid mask calculation and storage depending on grid parameter
+                # grid mask calculation and storage depending on grid parameter
                 if(args.grid):
                     if(epoch == 0):
                         grid_seq = getSequenceGridMask(x_seq, dataset_data, PedsList_seq,args.neighborhood_size, args.grid_size, args.use_cuda)
@@ -254,7 +242,7 @@ def train(args):
                 if args.use_cuda:                    
                     x_seq = x_seq.to(device)
 
-                #number of peds in this sequence per frame
+                # number of peds in this sequence per frame
                 numNodes = len(lookup_seq)
 
                 hidden_states = Variable(torch.zeros(numNodes, args.rnn_size))
@@ -329,11 +317,11 @@ def train(args):
                         target_id = target_id.item()
                     target_id = int(target_id)
 
-                    #get processing file name and then get dimensions of file
+                    # get processing file name and then get dimensions of file
                     folder_name = dataloader.get_directory_name_with_pointer(d_seq)
                     dataset_data = dataloader.get_dataset_dimension(folder_name)
                     
-                    #dense vector creation
+                    # dense vector creation
                     x_seq, lookup_seq = dataloader.convert_proper_array(x_seq, numPedsList_seq, PedsList_seq)
 
                     # target_idの存在確認
@@ -343,7 +331,7 @@ def train(args):
 
                     target_id_values = x_seq[0][lookup_seq[target_id], 0:2]
                     
-                    #get grid mask
+                    # get grid mask
                     grid_seq = getSequenceGridMask(x_seq, dataset_data, PedsList_seq, args.neighborhood_size, args.grid_size, args.use_cuda)
 
                     x_seq, first_values_dict = vectorize_seq(x_seq, PedsList_seq, lookup_seq)
@@ -351,7 +339,7 @@ def train(args):
                     if args.use_cuda:                    
                         x_seq = x_seq.to(device)
 
-                    #number of peds in this sequence per frame
+                    # number of peds in this sequence per frame
                     numNodes = len(lookup_seq)
 
                     hidden_states = Variable(torch.zeros(numNodes, args.rnn_size))
@@ -413,9 +401,9 @@ def train(args):
             f_err_epoch = 0
             num_of_batch = 0
 
-            #results of one epoch for all validation datasets
+            # results of one epoch for all validation datasets
             epoch_result = []
-            #results of one validation dataset
+            # results of one validation dataset
             results = []
 
             # For each batch
@@ -452,11 +440,11 @@ def train(args):
                         target_id = target_id.item()
                     target_id = int(target_id)
 
-                    #get processing file name and then get dimensions of file
+                    # get processing file name and then get dimensions of file
                     folder_name = dataloader.get_directory_name_with_pointer(d_seq)
                     dataset_data = dataloader.get_dataset_dimension(folder_name)
                     
-                    #dense vector creation
+                    # dense vector creation
                     x_seq, lookup_seq = dataloader.convert_proper_array(x_seq, numPedsList_seq, PedsList_seq)
                     
                     # target_idの存在確認
@@ -464,28 +452,28 @@ def train(args):
                         print(f"Warning: target_id {target_id} not found in lookup_seq. Skipping this sequence.")
                         continue
                     
-                    #will be used for error calculation
+                    # will be used for error calculation
                     orig_x_seq = x_seq.clone() 
                     
                     target_id_values = orig_x_seq[0][lookup_seq[target_id], 0:2]
                     
-                    #grid mask calculation
+                    # grid mask calculation
                     grid_seq = getSequenceGridMask(x_seq, dataset_data, PedsList_seq, args.neighborhood_size, args.grid_size, args.use_cuda)
                     
                     if args.use_cuda:
                         x_seq = x_seq.to(device)
                         orig_x_seq = orig_x_seq.to(device)
 
-                    #vectorize datapoints
+                    # vectorize datapoints
                     x_seq, first_values_dict = vectorize_seq(x_seq, PedsList_seq, lookup_seq)
 
-                    #sample predicted points from model
+                    # sample predicted points from model
                     ret_x_seq, loss = sample_validation_data(x_seq, PedsList_seq, grid_seq, args, net, lookup_seq, numPedsList_seq, dataloader)
 
-                    #revert the points back to original space
+                    # revert the points back to original space
                     ret_x_seq = revert_seq(ret_x_seq, PedsList_seq, lookup_seq, first_values_dict)
 
-                    #get mean and final error
+                    # get mean and final error
                     err = get_mean_error(ret_x_seq.data, orig_x_seq.data, PedsList_seq, PedsList_seq, args.use_cuda, lookup_seq)
                     f_err = get_final_error(ret_x_seq.data, orig_x_seq.data, PedsList_seq, PedsList_seq, lookup_seq)
                     
