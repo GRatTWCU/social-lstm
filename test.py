@@ -14,8 +14,9 @@ from helper import * # Assuming submission_preprocess, result_preprocess, save_s
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
+# test.pyの修正箇所（main関数内、DataLoader作成前）
+
 def main():
-    
     parser = argparse.ArgumentParser()
     # Observed length of the trajectory parameter
     parser.add_argument('--obs_length', type=int, default=8,
@@ -43,6 +44,20 @@ def main():
     parser.add_argument('--method', type=int, default=1,
                         help='Method of lstm will be used (1 = social lstm, 2 = obstacle lstm, 3 = vanilla lstm)')
     
+    # DataLoaderに必要な追加の引数を追加
+    parser.add_argument('--data_dir', type=str, default='./data',
+                        help='Data directory')
+    parser.add_argument('--dataset', type=str, default='eth',
+                        help='Dataset name')
+    parser.add_argument('--batch_size', type=int, default=1,
+                        help='Batch size for test')
+    parser.add_argument('--seq_length', type=int, default=20,
+                        help='Sequence length')
+    parser.add_argument('--class_balance', type=int, default=-1,
+                        help='Class balance parameter')
+    parser.add_argument('--force_preprocessing', action="store_true", default=False,
+                        help='Force preprocessing')
+    
     # Parse the parameters
     sample_args = parser.parse_args()
     
@@ -52,6 +67,10 @@ def main():
     if sample_args.drive is True:
         prefix = 'drive/semester_project/social_lstm_final/'
         f_prefix = 'drive/semester_project/social_lstm_final'
+        sample_args.data_dir = f_prefix + '/data'
+
+    # seq_lengthを計算値で更新
+    sample_args.seq_length = sample_args.pred_length + sample_args.obs_length
 
     # run sh file for folder creation
     if not os.path.isdir("log/"):
@@ -91,6 +110,8 @@ def main():
             print(f"ERROR: {message}")
 
     dataloader = DataLoader(sample_args, DummyLogger()) # Pass sample_args and a logger
+    
+    # 以下は元のtest.pyの続き... # Pass sample_args and a logger
     create_directories(os.path.join(result_directory, model_name), dataloader.get_all_directory_namelist())
     create_directories(plot_directory, [plot_test_file_directory])
     dataloader.reset_batch_pointer()
