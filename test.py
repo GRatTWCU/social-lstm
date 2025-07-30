@@ -5,11 +5,9 @@ import pickle
 import argparse
 import time
 import subprocess
-
-
 import torch
 from torch.autograd import Variable
-
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 import numpy as np
 from utils import DataLoader
 from helper import getCoef, sample_gaussian_2d, get_mean_error, get_final_error
@@ -113,13 +111,13 @@ def main():
         net = get_model(sample_args.method, saved_args, True)
 
         if sample_args.use_cuda:        
-            net = net.cuda()
+            net = net.to(device)
 
         # Get the checkpoint path
         checkpoint_path = os.path.join(save_directory, save_tar_name+str(sample_args.epoch)+'.tar')
         if os.path.isfile(checkpoint_path):
             print('Loading checkpoint')
-            checkpoint = torch.load(checkpoint_path)
+            checkpoint = torch.load(checkpoint_path, map_location=device)
             model_epoch = checkpoint['epoch']
             net.load_state_dict(checkpoint['state_dict'])
             print('Loaded checkpoint at epoch', model_epoch)
@@ -143,6 +141,16 @@ def main():
 
             # Get the sequence
             x_seq, d_seq ,numPedsList_seq, PedsList_seq, target_id = x[0], d[0], numPedsList[0], PedsList[0], target_ids[0]
+            
+            # Fix target_id if it's an array/list
+            if isinstance(target_id, (list, np.ndarray)):
+                target_id = target_id[0] if len(target_id) > 0 else target_id
+            elif hasattr(target_id, 'item'):  # PyTorch tensor
+                target_id = target_id.item()
+            
+            # Debug print
+            print(f"Processing target_id: {target_id} (type: {type(target_id)})")
+            
             dataloader.clean_test_data(x_seq, target_id, sample_args.obs_length, sample_args.pred_length)
             dataloader.clean_ped_list(x_seq, PedsList_seq, target_id, sample_args.obs_length, sample_args.pred_length)
 
@@ -177,7 +185,7 @@ def main():
 
 
             if sample_args.use_cuda:
-                x_seq = x_seq.cuda()
+                x_seq = x_seq.to(device)
 
             # The sample function
             if sample_args.method == 3: #vanilla lstm
@@ -210,7 +218,7 @@ def main():
 
 
             if dataset_pointer_ins is not dataloader.dataset_pointer:
-                if dataloader.dataset_pointer is not 0:
+                if dataloader.dataset_pointer != 0:
                     iteration_submission.append(submission)
                     iteration_result.append(results)
 
@@ -266,11 +274,11 @@ def sample(x_seq, Pedlist, args, net, true_x_seq, true_Pedlist, saved_args, dime
         # Construct variables for hidden and cell states
         hidden_states = Variable(torch.zeros(numx_seq, net.args.rnn_size))
         if args.use_cuda:
-            hidden_states = hidden_states.cuda()
+            hidden_states = hidden_states.to(device)
         if not is_gru:
             cell_states = Variable(torch.zeros(numx_seq, net.args.rnn_size))
             if args.use_cuda:
-                cell_states = cell_states.cuda()
+                cell_states = cell_states.to(device)
         else:
             cell_states = None
 
@@ -279,7 +287,7 @@ def sample(x_seq, Pedlist, args, net, true_x_seq, true_Pedlist, saved_args, dime
 
         # Initialize the return data structure
         if args.use_cuda:
-            ret_x_seq = ret_x_seq.cuda()
+            ret_x_seq = ret_x_seq.to(device)
 
 
         # For the observed part of the trajectory
@@ -334,7 +342,7 @@ def sample(x_seq, Pedlist, args, net, true_x_seq, true_Pedlist, saved_args, dime
             list_of_x_seq = Variable(torch.LongTensor(converted_pedlist))
 
             if args.use_cuda:
-                list_of_x_seq = list_of_x_seq.cuda()
+                list_of_x_seq = list_of_x_seq.to(device)
            
             #Get their predicted positions
             current_x_seq = torch.index_select(ret_x_seq[tstep+1], 0, list_of_x_seq)
@@ -348,7 +356,7 @@ def sample(x_seq, Pedlist, args, net, true_x_seq, true_Pedlist, saved_args, dime
 
                 prev_grid = Variable(torch.from_numpy(prev_grid).float())
                 if args.use_cuda:
-                    prev_grid = prev_grid.cuda()
+                    prev_grid = prev_grid.to(device)
 
         #ret_x_seq[args.obs_length-1] = temp_last_observed
 

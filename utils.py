@@ -71,7 +71,7 @@ class DataLoader():
 
         # check validation dataset availibility and clip the reuqested number if it is bigger than available validation dataset
         if self.additional_validation:
-            if len(self.validation_dataset) is 0:
+            if len(self.validation_dataset) == 0:
                 print("There is no validation dataset.Aborted.")
                 self.additional_validation = False
             else:
@@ -219,13 +219,13 @@ class DataLoader():
                 # if validation mode, read validation file to pandas dataframe and process
                 if self.additional_validation:
                     df = pd.read_csv(directory, dtype={'frame_num':'int','ped_id':'int' }, delimiter = ' ',  header=None, names=column_names)
-                    self.target_ids = np.array(df.drop_duplicates(subset={'ped_id'}, keep='first', inplace=False)['ped_id'])
+                    self.target_ids = np.array(df.drop_duplicates(subset=['ped_id'], keep='first', inplace=False)['ped_id'])
 
                 # if test mode, read test file to pandas dataframe and process
                 else:
                     column_names = ['frame_num','ped_id','y','x']
                     df = pd.read_csv(directory, dtype={'frame_num':'int','ped_id':'int' }, delimiter = ' ',  header=None, names=column_names, converters = {c:lambda x: float('nan') if x == '?' else float(x) for c in ['y','x']})
-                    self.target_ids = np.array(df[df['y'].isnull()].drop_duplicates(subset={'ped_id'}, keep='first', inplace=False)['ped_id'])
+                    self.target_ids = np.array(df[df['y'].isnull()].drop_duplicates(subset=['ped_id'], keep='first', inplace=False)['ped_id'])
 
             # convert pandas -> numpy array
             data = np.array(df)
@@ -420,8 +420,17 @@ class DataLoader():
                 y_batch.append(seq_target_frame_data)
                 numPedsList_batch.append(seq_numPedsList)
                 PedsList_batch.append(seq_PedsList)
-                # get correct target ped id for the sequence
-                target_ids.append(self.target_ids[self.dataset_pointer][math.floor((self.frame_pointer)/self.seq_length)])
+                
+                # get correct target ped id for the sequence - ROOT CAUSE FIX
+                raw_target_id = self.target_ids[self.dataset_pointer][math.floor((self.frame_pointer)/self.seq_length)]
+                if isinstance(raw_target_id, (list, np.ndarray)):
+                    target_id = int(raw_target_id[0]) if len(raw_target_id) > 0 else 0
+                elif hasattr(raw_target_id, 'item'):
+                    target_id = int(raw_target_id.item())
+                else:
+                    target_id = int(raw_target_id)
+                target_ids.append(target_id)
+                
                 self.frame_pointer += self.seq_length
 
                 d.append(self.dataset_pointer)
@@ -479,8 +488,17 @@ class DataLoader():
                 y_batch.append(seq_target_frame_data)
                 numPedsList_batch.append(seq_numPedsList)
                 PedsList_batch.append(seq_PedsList)
-                # get correct target ped id for the sequence
-                target_ids.append(self.target_ids[self.dataset_pointer][math.floor((self.valid_frame_pointer)/self.seq_length)])
+                
+                # get correct target ped id for the sequence - ROOT CAUSE FIX
+                raw_target_id = self.target_ids[self.dataset_pointer][math.floor((self.valid_frame_pointer)/self.seq_length)]
+                if isinstance(raw_target_id, (list, np.ndarray)):
+                    target_id = int(raw_target_id[0]) if len(raw_target_id) > 0 else 0
+                elif hasattr(raw_target_id, 'item'):
+                    target_id = int(raw_target_id.item())
+                else:
+                    target_id = int(raw_target_id)
+                target_ids.append(target_id)
+                
                 self.valid_frame_pointer += self.seq_length
 
                 d.append(self.valid_dataset_pointer)
@@ -597,10 +615,10 @@ class DataLoader():
 
     def get_file_name(self, offset=0, pointer_type = 'train'):
         #return file name of processing or pointing by dataset pointer
-        if pointer_type is 'train':
+        if pointer_type == 'train':
             return self.data_dirs[self.dataset_pointer+offset].split('/')[-1]
          
-        elif pointer_type is 'valid':
+        elif pointer_type == 'valid':
             return self.data_dirs[self.valid_dataset_pointer+offset].split('/')[-1]
 
     def create_folder_file_dict(self):
@@ -710,4 +728,3 @@ class DataLoader():
     def get_dataset_dimension(self, file_name):
         # return dataset dimension using dataset file name
         return self.dataset_dimensions[file_name]
-
