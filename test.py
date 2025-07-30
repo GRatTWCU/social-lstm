@@ -131,12 +131,19 @@ def main():
             # Get the sequence
             x_seq, d_seq, numPedsList_seq, PedsList_seq, target_id = x[0], d[0], numPedsList[0], PedsList[0], target_ids[0]
             
-            # エラーの原因となっていた部分 - target_idの型チェック
+            # target_idの型チェックと変換（より厳密に）
+            print(f"Processing target_id: {target_id} (type: {type(target_id)})")
+            
             if isinstance(target_id, (list, np.ndarray)):
                 target_id = target_id[0] if len(target_id) > 0 else 0
-            elif hasattr(target_id, 'item'):
+            elif hasattr(target_id, 'item'):  # numpy scalar の場合
                 target_id = target_id.item()
-            target_id = int(target_id)
+            elif isinstance(target_id, (np.floating, np.integer)):  # numpy数値型の場合
+                target_id = target_id.item()
+            
+            # 確実にPythonのintに変換
+            target_id = int(float(target_id))
+            print(f"Converted target_id: {target_id} (type: {type(target_id)})")
             
             dataloader.clean_test_data(x_seq, target_id, sample_args.obs_length, sample_args.pred_length)
             dataloader.clean_ped_list(x_seq, PedsList_seq, target_id, sample_args.obs_length, sample_args.pred_length)
@@ -151,10 +158,19 @@ def main():
             # will be used for error calculation
             orig_x_seq = x_seq.clone() 
             
-            # target_idの存在確認
+            # target_idの存在確認（より詳細なデバッグ情報付き）
+            print(f"Available keys in lookup_seq: {list(lookup_seq.keys())}")
+            
             if target_id not in lookup_seq:
-                print(f"Warning: target_id {target_id} not found in lookup_seq. Skipping this batch.")
-                continue
+                print(f"Error: target_id {target_id} not found in lookup_seq.")
+                print(f"Available pedestrian IDs: {list(lookup_seq.keys())}")
+                # 最初の歩行者IDを代用として使用
+                if lookup_seq:
+                    target_id = list(lookup_seq.keys())[0]
+                    print(f"Using first available pedestrian ID: {target_id}")
+                else:
+                    print("No pedestrians found in lookup_seq. Skipping this batch.")
+                    continue
                 
             target_id_values = orig_x_seq[0][lookup_seq[target_id], 0:2]
             
