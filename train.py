@@ -122,9 +122,18 @@ def train(args):
     args.class_balance = -1
     args.force_preprocessing = True
     
+    # シンプルなロガークラス
+    class SimpleLogger:
+        def info(self, message):
+            print(f"INFO: {message}")
+        def warning(self, message):
+            print(f"WARNING: {message}")
+        def error(self, message):
+            print(f"ERROR: {message}")
+    
     # Create the data loader object. This object would preprocess the data in terms of
     # batches each of size args.batch_size, of length args.seq_length
-    dataloader = DataLoader(args)
+    dataloader = DataLoader(args, SimpleLogger())
 
     model_name = "LSTM"
     method_name = "SOCIALLSTM"
