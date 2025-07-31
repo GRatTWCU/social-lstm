@@ -122,7 +122,7 @@ def train(args):
     
     # Create the data loader object. This object would preprocess the data in terms of
     # batches each of size args.batch_size, of length args.seq_length
-    dataloader = DataLoader(args, forcePreProcess=True)
+    dataloader = DataLoader(args)
 
     model_name = "LSTM"
     method_name = "SOCIALLSTM"
