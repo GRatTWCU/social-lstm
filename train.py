@@ -119,6 +119,7 @@ def train(args):
     # DataLoaderに必要な属性を追加
     args.data_dir = f_prefix + '/data'
     args.dataset = 'eth'  # デフォルトデータセット
+    args.class_balance = -1  # デフォルト値
     
     # シンプルなロガークラス
     class SimpleLogger:
