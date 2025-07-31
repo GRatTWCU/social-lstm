@@ -116,9 +116,13 @@ def train(args):
     if validation_epoch_list:
         validation_epoch_list[-1]-=1
 
+    # DataLoaderに必要な属性を追加
+    args.data_dir = f_prefix + '/data'
+    args.dataset = 'eth'  # デフォルトデータセット
+    
     # Create the data loader object. This object would preprocess the data in terms of
     # batches each of size args.batch_size, of length args.seq_length
-    dataloader = DataLoader(f_prefix, args.batch_size, args.seq_length)
+    dataloader = DataLoader(args, forcePreProcess=True)
 
     model_name = "LSTM"
     method_name = "SOCIALLSTM"
