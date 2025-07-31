@@ -199,6 +199,10 @@ def train(args):
         loss_epoch = 0
 
         # For each batch
+        if dataloader.num_batches == 0:
+            print("Warning: No batches available. Skipping training.")
+            break
+            
         for batch in range(dataloader.num_batches):
             start = time.time()
 
@@ -298,7 +302,7 @@ def train(args):
                                                                                     epoch,
                                                                                     loss_batch, end - start))
 
-        loss_epoch /= dataloader.num_batches
+        loss_epoch /= max(dataloader.num_batches, 1)  # ゼロ除算を防ぐ
         # Log loss values
         log_file_curve.write("Training epoch: "+str(epoch)+" loss: "+str(loss_epoch)+'\n')
 
@@ -387,8 +391,8 @@ def train(args):
                 err_epoch += err_batch
 
             if dataloader.valid_num_batches != 0:            
-                loss_epoch_val = loss_epoch_val / dataloader.valid_num_batches
-                err_epoch = err_epoch / dataloader.valid_num_batches
+                loss_epoch_val = loss_epoch_val / max(dataloader.valid_num_batches, 1)
+                err_epoch = err_epoch / max(dataloader.valid_num_batches, 1)
 
                 # Update best validation loss until now
                 if loss_epoch_val < best_val_loss:
@@ -512,9 +516,9 @@ def train(args):
             all_epoch_results.append(epoch_result)
 
             if dataloader.num_batches != 0:            
-                loss_epoch_val_data = loss_epoch_val_data / dataloader.num_batches
-                err_epoch = err_epoch / dataloader.num_batches
-                f_err_epoch = f_err_epoch / dataloader.num_batches
+                loss_epoch_val_data = loss_epoch_val_data / max(dataloader.num_batches, 1)
+                err_epoch = err_epoch / max(dataloader.num_batches, 1)
+                f_err_epoch = f_err_epoch / max(dataloader.num_batches, 1)
                 average_err = (err_epoch + f_err_epoch)/2
 
                 # Update best validation loss until now
