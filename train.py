@@ -120,6 +120,7 @@ def train(args):
     args.data_dir = f_prefix + '/data'
     args.dataset = 'eth'  # デフォルトデータセット
     args.class_balance = -1  # デフォルト値
+    args.force_preprocessing = True  # デフォルト値
     
     # シンプルなロガークラス
     class SimpleLogger:
