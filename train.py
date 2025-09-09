@@ -9,12 +9,17 @@ import pickle
 import subprocess
 
 from model import SocialModel
-from utils import DataLoader, get_mean_error, get_final_error, revert_seq, vectorize_seq
+from utils import DataLoader, get_mean_error, get_final_error, revert_seq, vectorize_seq, time_lr_scheduler
 from grid import getSequenceGridMask
 
 def main():
     
     parser = argparse.ArgumentParser()
+    
+    # --- 変更点: データセットの場所を指定する引数を必須で追加 ---
+    parser.add_argument('--data_root', type=str, required=True,
+                        help='Root directory of the datasets (e.g., /content/datasets)')
+
     # RNN size parameter (dimension of the output/hidden state)
     parser.add_argument('--input_size', type=int, default=2)
     parser.add_argument('--output_size', type=int, default=5)
@@ -83,17 +88,13 @@ def main():
 
 
 def train(args):
-    # --- 変更点: f_prefix と --data_root 関連のコードを削除 ---
-    # DataLoaderが自動的にパスを見つけるため、ここは不要になります。
-
     # ログ・モデル保存用のディレクトリ作成
     os.makedirs("log", exist_ok=True)
     os.makedirs("model", exist_ok=True)
     
-    # --- 変更点: DataLoaderの呼び出し方をシンプルに変更 ---
-    # f_prefixを渡さず、引数を名前で指定することで、
-    # utils.pyの自動パス検出機能が動作します。
-    dataloader = DataLoader(batch_size=args.batch_size, 
+    # --- 変更点: DataLoaderにデータパス(f_prefix)を渡すように修正 ---
+    dataloader = DataLoader(f_prefix=args.data_root, 
+                            batch_size=args.batch_size, 
                             seq_length=args.seq_length, 
                             num_of_validation=args.num_validation, 
                             forcePreProcess=args.forcePreProcess)
