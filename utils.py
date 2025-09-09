@@ -164,8 +164,17 @@ def sample_validation_data(x_seq, PedsList_seq, grid_seq, args, net, lookup_seq,
 
 class DataLoader():
 
-    def __init__(self, f_prefix, batch_size=5, seq_length=20, num_of_validation=0, forcePreProcess=False, infer=False, generate=False):
+    def __init__(self, batch_size=5, seq_length=20, num_of_validation=0, forcePreProcess=False, infer=False, generate=False):
         
+        # --- ここからが変更点: データセットのパスを自動的に見つける ---
+        # このファイル (utils.py) の絶対パスを取得
+        script_path = os.path.realpath(__file__)
+        # このファイルの親ディレクトリ（プロジェクトのルートと仮定）を取得
+        project_root = os.path.dirname(script_path)
+        # データセットのルートパスを組み立てる (例: <project_root>/datasets)
+        f_prefix = os.path.join(project_root, 'datasets')
+        # --- ここまで ---
+
         base_test_dataset = [
             'eth/test.txt', 'hotel/test.txt', 'zara1/test.txt', 'zara2/test.txt', 'univ/test.txt'
         ]
@@ -178,7 +187,7 @@ class DataLoader():
 
         self.f_prefix = f_prefix
         
-        # --- ここからがエラー表示を強化した部分 ---
+        # --- エラー表示を強化した部分 ---
         if infer:
             path_list = base_test_dataset
         else:
@@ -190,12 +199,10 @@ class DataLoader():
             if os.path.exists(file_path):
                 self.data_files.append(file_path)
             else:
-                # 見つからないファイルがあった場合に警告メッセージを表示
                 print(f"[DataLoader Warning] File not found and skipped: {file_path}")
 
-        # データファイルが1つも見つからなかった場合にエラーを出す
         if not self.data_files:
-            raise FileNotFoundError(f"No data files were found. Check the path specified in --data_root: {f_prefix}")
+            raise FileNotFoundError(f"No data files were found. Assumed datasets path is: {f_prefix}")
         # --- ここまで ---
         
         self.validation_files = [os.path.join(f_prefix, d) for d in base_validation_dataset]
@@ -325,7 +332,6 @@ class DataLoader():
             counter += num_seq
             print(f"{'Validation' if validation_set else 'Training'} data from {dataset_name}: {len(self.data[dataset])} frames, {num_seq} sequences")
         
-        # バッチサイズが0でないことを確認
         if self.batch_size > 0:
             self.num_batches = int(counter / self.batch_size)
         else:
@@ -341,7 +347,6 @@ class DataLoader():
         while i < self.batch_size:
             if not self.data or self.dataset_pointer >= len(self.data) or not self.data[self.dataset_pointer]: 
                 self.tick_batch_pointer()
-                # 全てのデータセットを一周したらループを抜ける（無限ループ防止）
                 if self.dataset_pointer == 0:
                     break
                 continue
