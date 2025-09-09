@@ -404,28 +404,3 @@ class DataLoader():
             'zara2': [720, 576], 'univ': [720, 576]
         }
         return dataset_dimensions.get(key, [720, 576])
-
-```
-
----
-
-### **次のステップ**
-
-1.  上記のコードで `utils.py` を完全に上書き保存してください。
-2.  そして、**もう一度 `train.py` を実行してください。**
-
-    ```bash
-    # 例: Google Colabの場合
-    !python train.py --data_root /content/datasets --forcePreProcess --use_cuda
-    ```
-
-今度こそ、`ZeroDivisionError` の代わりに、以下のような**より分かりやすいメッセージ**が表示されるはずです。
-
-**【表示されるメッセージの例】**
-
-もしファイルパスが間違っていれば...
-```
-[DataLoader Warning] File not found and skipped: /content/datasets/eth/train.txt
-[DataLoader Warning] File not found and skipped: /content/datasets/hotel/train.txt
-...
-FileNotFoundError: No data files were found. Check the path specified in --data_root: /content/datasets
