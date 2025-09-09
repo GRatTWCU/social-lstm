@@ -1,387 +1,176 @@
-import os
-import pickle
-import os
-import pickle
-import argparse
-import time
-import subprocess
 import torch
+import numpy as np
 from torch.autograd import Variable
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-import numpy as np
-from utils import DataLoader
-from helper import getCoef, sample_gaussian_2d, get_mean_error, get_final_error
-from helper import *
-from grid import getSequenceGridMask, getGridMask
+import argparse
+import os
+import time
+import pickle
 
+from model import SocialModel
+from utils import DataLoader, get_mean_error, get_final_error, revert_seq, vectorize_seq
+from grid import getSequenceGridMask
 
 def main():
-    
     parser = argparse.ArgumentParser()
-    # Observed length of the trajectory parameter
+    
+    # --- 必ず指定が必要な引数 ---
+    parser.add_argument('--model_path', type=str, required=True,
+                        help='Path to the saved model file (.tar)')
+
+    # --- データセットとシーケンスに関する引数 ---
+    parser.add_argument('--data_root', type=str, default='./datasets',
+                        help='Root directory of the datasets')
     parser.add_argument('--obs_length', type=int, default=8,
-                        help='Observed length of the trajectory')
-    # Predicted length of the trajectory parameter
+                        help='Observation length')
     parser.add_argument('--pred_length', type=int, default=12,
-                        help='Predicted length of the trajectory')
+                        help='Prediction length')
     
+    # --- その他 ---
+    parser.add_argument('--forcePreProcess', action="store_true", default=False,
+                        help='Force preprocess the data again')
+
+    args = parser.parse_args()
+    test(args)
+
+
+def test(args):
+    # 学習時の設定ファイルを読み込む
+    # モデルのディレクトリパスを取得
+    model_dir = os.path.dirname(args.model_path)
+    config_path = os.path.join(model_dir, 'config.pkl')
     
-    # Model to be loaded
-    parser.add_argument('--epoch', type=int, default=14,
-                        help='Epoch of model to be loaded')
-    # cuda support
-    parser.add_argument('--use_cuda', action="store_true", default=False,
-                        help='Use GPU or not')
-    # drive support
-    parser.add_argument('--drive', action="store_true", default=False,
-                        help='Use Google drive or not')
-    # number of iteration -> we are trying many times to get lowest test error derived from observed part and prediction of observed
-    # part.Currently it is useless because we are using direct copy of observed part and no use of prediction.Test error will be 0.
-    parser.add_argument('--iteration', type=int, default=1,
-                        help='Number of iteration to create test file (smallest test errror will be selected)')
-    # gru model
-    parser.add_argument('--gru', action="store_true", default=False,
-                        help='True : GRU cell, False: LSTM cell')
-    # method selection
-    parser.add_argument('--method', type=int, default=1,
-                        help='Method of lstm will be used (1 = social lstm, 2 = obstacle lstm, 3 = vanilla lstm)')
-    
-    # Parse the parameters
-    sample_args = parser.parse_args()
-    
-    #for drive run
-    prefix = ''
-    f_prefix = '.'
-    if sample_args.drive is True:
-      prefix='drive/semester_project/social_lstm_final/'
-      f_prefix = 'drive/semester_project/social_lstm_final'
+    if not os.path.exists(config_path):
+        print(f"Error: Config file not found at {config_path}")
+        return
 
-    #run sh file for folder creation
-    if not os.path.isdir("log/"):
-      print("Directory creation script is running...")
-      subprocess.call([f_prefix+'/make_directories.sh'])
-
-    method_name = get_method_name(sample_args.method)
-    model_name = "LSTM"
-    save_tar_name = method_name+"_lstm_model_"
-    if sample_args.gru:
-        model_name = "GRU"
-        save_tar_name = method_name+"_gru_model_"
-
-    print("Selected method name: ", method_name, " model name: ", model_name)
-
-    # Save directory
-    save_directory = os.path.join(f_prefix, 'model/', method_name, model_name)
-    #plot directory for plotting in the future
-    plot_directory = os.path.join(f_prefix, 'plot/', method_name, model_name)
-
-    result_directory = os.path.join(f_prefix, 'result/', method_name)
-    plot_test_file_directory = 'test'
-
-
-
-    # Define the path for the config file for saved args
-    with open(os.path.join(save_directory,'config.pkl'), 'rb') as f:
+    with open(config_path, 'rb') as f:
         saved_args = pickle.load(f)
 
-    seq_lenght = sample_args.pred_length + sample_args.obs_length
-
-    # Create the DataLoader object
-    dataloader = DataLoader(f_prefix, 1, seq_lenght, forcePreProcess = True, infer=True)
-    create_directories(os.path.join(result_directory, model_name), dataloader.get_all_directory_namelist())
-    create_directories(plot_directory, [plot_test_file_directory])
-    dataloader.reset_batch_pointer()
-
-
-
+    # モデルのインスタンス化
+    net = SocialModel(saved_args, infer=True)
+    if saved_args.use_cuda:
+        net = net.to(device)
     
-    dataset_pointer_ins = dataloader.dataset_pointer
-
+    # 学習済み重みの読み込み
+    checkpoint = torch.load(args.model_path)
+    net.load_state_dict(checkpoint['state_dict'])
+    net.eval() # 評価モードに設定
     
-    smallest_err = 100000
-    smallest_err_iter_num = -1
-    origin = (0,0)
-    reference_point = (0,1)
+    print(f"Loaded model from epoch {checkpoint['epoch']}")
 
-    submission_store = [] # store submission data points (txt)
-    result_store = [] # store points for plotting
+    # データローダーの準備
+    # テスト時は観測+予測の全長をseq_lengthとする
+    seq_length = args.obs_length + args.pred_length
+    dataloader = DataLoader(args.data_root, batch_size=1, seq_length=seq_length, forcePreProcess=args.forcePreProcess, infer=True)
 
-    for iteration in range(sample_args.iteration):
-        # Initialize net
-        net = get_model(sample_args.method, saved_args, True)
+    # エラー計算用のリスト
+    total_ade, total_fde = 0, 0
+    total_sequences = 0
 
-        if sample_args.use_cuda:        
-            net = net.to(device)
+    print("Starting testing...")
+    # 全てのテストデータセットをループ
+    for i in range(dataloader.numDatasets):
+        dataloader.reset_batch_pointer()
+        dataloader.dataset_pointer = i # データセットを順番に指定
 
-        # Get the checkpoint path
-        checkpoint_path = os.path.join(save_directory, save_tar_name+str(sample_args.epoch)+'.tar')
-        if os.path.isfile(checkpoint_path):
-            print('Loading checkpoint')
-            checkpoint = torch.load(checkpoint_path, map_location=device)
-            model_epoch = checkpoint['epoch']
-            net.load_state_dict(checkpoint['state_dict'])
-            print('Loaded checkpoint at epoch', model_epoch)
+        dataset_ade, dataset_fde = 0, 0
+        num_sequences_in_dataset = dataloader.num_batches
+
+        # 現在のデータセットの全シーケンスをループ
+        for batch in range(num_sequences_in_dataset):
+            start_time = time.time()
+            
+            # バッチサイズ1でデータを取得
+            x, _, d, numPedsList, PedsList, _ = dataloader.next_batch()
+            
+            # バッチ内のシーケンスを取得
+            x_seq, d_seq, PedsList_seq = x[0], d[0], PedsList[0]
+
+            # データをテンソルに変換
+            x_seq_tensor, lookup_seq = dataloader.convert_proper_array(x_seq, numPedsList[0], PedsList_seq)
+            
+            # 評価のために元の絶対座標を保持
+            orig_x_seq = x_seq_tensor.clone()
+            
+            # モデルへの入力のために相対座標に変換
+            vec_x_seq, first_values_dict = vectorize_seq(x_seq_tensor.clone(), PedsList_seq, lookup_seq)
+            
+            if saved_args.use_cuda:
+                vec_x_seq = vec_x_seq.to(device)
+
+            # ----- 軌道予測 -----
+            numNodes = len(lookup_seq)
+            hidden_states = Variable(torch.zeros(numNodes, saved_args.rnn_size)).to(device)
+            cell_states = Variable(torch.zeros(numNodes, saved_args.rnn_size)).to(device)
+            
+            # 予測結果を格納するテンソル
+            predicted_traj = vec_x_seq.clone()
+
+            # 1. 観測フェーズ: 8フレームをモデルに入力し、隠れ状態を更新
+            for frame_num in range(args.obs_length - 1):
+                current_grid = getSequenceGridMask(vec_x_seq[frame_num].unsqueeze(0), dataloader.get_dataset_dimension('eth'), [PedsList_seq[frame_num]], saved_args.neighborhood_size, saved_args.grid_size, saved_args.use_cuda)
+                _, hidden_states, cell_states = net(vec_x_seq[frame_num].unsqueeze(0), current_grid, hidden_states, cell_states, [PedsList_seq[frame_num]], numPedsList[0], dataloader, lookup_seq)
+
+            # 2. 予測フェーズ: 12フレームを自己回帰的に予測
+            # 観測の最後のフレームが、予測の最初の入力になる
+            current_pos = vec_x_seq[args.obs_length - 1].unsqueeze(0)
+            
+            for frame_num in range(args.pred_length):
+                current_grid = getSequenceGridMask(current_pos, dataloader.get_dataset_dimension('eth'), [PedsList_seq[args.obs_length - 1 + frame_num]], saved_args.neighborhood_size, saved_args.grid_size, saved_args.use_cuda)
+                
+                outputs, hidden_states, cell_states = net(current_pos, current_grid, hidden_states, cell_states, [PedsList_seq[args.obs_length - 1 + frame_num]], numPedsList[0], dataloader, lookup_seq)
+                
+                # 出力から次の位置をサンプリング
+                mux, muy, sx, sy, corr = getCoef(outputs)
+                next_x, next_y = sample_gaussian_2d(mux, muy, sx, sy, corr, [PedsList_seq[args.obs_length - 1 + frame_num]], lookup_seq)
+
+                # 次の入力を作成
+                next_pos = torch.zeros_like(current_pos.squeeze(0))
+                for ped_id in PedsList_seq[args.obs_length + frame_num]:
+                     if ped_id in lookup_seq:
+                        next_pos[lookup_seq[ped_id], 0] = next_x[lookup_seq[ped_id]]
+                        next_pos[lookup_seq[ped_id], 1] = next_y[lookup_seq[ped_id]]
+                
+                # 予測結果を保存し、次の入力とする
+                predicted_traj[args.obs_length + frame_num] = next_pos
+                current_pos = next_pos.unsqueeze(0)
+
+            # ----- エラー計算 -----
+            # 予測軌道を絶対座標に戻す
+            predicted_traj_abs = revert_seq(predicted_traj, PedsList_seq, lookup_seq, first_values_dict)
+            
+            # 予測部分のみを切り出す
+            pred_true_traj = orig_x_seq[args.obs_length:]
+            pred_predicted_traj = predicted_traj_abs[args.obs_length:]
+            
+            # ADEとFDEを計算
+            ade = get_mean_error(pred_predicted_traj.data, pred_true_traj.data, PedsList_seq[args.obs_length:], PedsList_seq[args.obs_length:], saved_args.use_cuda, lookup_seq)
+            fde = get_final_error(pred_predicted_traj.data, pred_true_traj.data, PedsList_seq[args.obs_length:], PedsList_seq[args.obs_length:], lookup_seq)
+
+            dataset_ade += ade
+            dataset_fde += fde
+            
+            end_time = time.time()
+            print(f"Dataset: {dataloader.data_dirs[i].split('/')[-2]}, Sequence: {batch + 1}/{num_sequences_in_dataset}, ADE: {ade:.4f}, FDE: {fde:.4f}, Time: {end_time - start_time:.2f}s")
         
-        # For each batch
-        iteration_submission = []
-        iteration_result = []
-        results = []
-        submission = []
+        # データセットごとの平均エラー
+        if num_sequences_in_dataset > 0:
+            avg_dataset_ade = dataset_ade / num_sequences_in_dataset
+            avg_dataset_fde = dataset_fde / num_sequences_in_dataset
+            print(f"--- Average for {dataloader.data_dirs[i].split('/')[-2]} --- ADE: {avg_dataset_ade:.4f}, FDE: {avg_dataset_fde:.4f} ---")
+            total_ade += dataset_ade
+            total_fde += dataset_fde
+            total_sequences += num_sequences_in_dataset
 
-       
-        # Variable to maintain total error
-        total_error = 0
-        final_error = 0
-
-
-        for batch in range(dataloader.num_batches):
-            start = time.time()
-            # Get data
-            x, y, d , numPedsList, PedsList ,target_ids = dataloader.next_batch()
-
-            # Get the sequence
-            x_seq, d_seq ,numPedsList_seq, PedsList_seq, target_id = x[0], d[0], numPedsList[0], PedsList[0], target_ids[0]
-            
-            # Fix target_id if it's an array/list
-            if isinstance(target_id, (list, np.ndarray)):
-                target_id = target_id[0] if len(target_id) > 0 else target_id
-            elif hasattr(target_id, 'item'):  # PyTorch tensor
-                target_id = target_id.item()
-            
-            # Debug print
-            print(f"Processing target_id: {target_id} (type: {type(target_id)})")
-            
-            dataloader.clean_test_data(x_seq, target_id, sample_args.obs_length, sample_args.pred_length)
-            dataloader.clean_ped_list(x_seq, PedsList_seq, target_id, sample_args.obs_length, sample_args.pred_length)
-
-            
-            #get processing file name and then get dimensions of file
-            folder_name = dataloader.get_directory_name_with_pointer(d_seq)
-            dataset_data = dataloader.get_dataset_dimension(folder_name)
-            
-            #dense vector creation
-            x_seq, lookup_seq = dataloader.convert_proper_array(x_seq, numPedsList_seq, PedsList_seq)
-            
-            #will be used for error calculation
-            orig_x_seq = x_seq.clone() 
-            
-            target_id_values = orig_x_seq[0][lookup_seq[target_id], 0:2]
-            
-            #grid mask calculation
-            if sample_args.method == 2: #obstacle lstm
-                grid_seq = getSequenceGridMask(x_seq, dataset_data, PedsList_seq, saved_args.neighborhood_size, saved_args.grid_size, saved_args.use_cuda, True)
-            elif  sample_args.method == 1: #social lstm   
-                grid_seq = getSequenceGridMask(x_seq, dataset_data, PedsList_seq, saved_args.neighborhood_size, saved_args.grid_size, saved_args.use_cuda)
-
-            #vectorize datapoints
-            x_seq, first_values_dict = vectorize_seq(x_seq, PedsList_seq, lookup_seq)
-
-            # <------------- Experimental block ---------------->
-            # x_seq = translate(x_seq, PedsList_seq, lookup_seq ,target_id_values)
-            # angle = angle_between(reference_point, (x_seq[1][lookup_seq[target_id], 0].data.numpy(), x_seq[1][lookup_seq[target_id], 1].data.numpy()))
-            # x_seq = rotate_traj_with_target_ped(x_seq, angle, PedsList_seq, lookup_seq)
-            # grid_seq = getSequenceGridMask(x_seq[:sample_args.obs_length], dataset_data, PedsList_seq, saved_args.neighborhood_size, saved_args.grid_size, sample_args.use_cuda)
-            # x_seq, first_values_dict = vectorize_seq(x_seq, PedsList_seq, lookup_seq)
-
-
-            if sample_args.use_cuda:
-                x_seq = x_seq.to(device)
-
-            # The sample function
-            if sample_args.method == 3: #vanilla lstm
-                # Extract the observed part of the trajectories
-                obs_traj, obs_PedsList_seq = x_seq[:sample_args.obs_length], PedsList_seq[:sample_args.obs_length]
-                ret_x_seq = sample(obs_traj, obs_PedsList_seq, sample_args, net, x_seq, PedsList_seq, saved_args, dataset_data, dataloader, lookup_seq, numPedsList_seq, sample_args.gru)
-
-            else:
-                # Extract the observed part of the trajectories
-                obs_traj, obs_PedsList_seq, obs_grid = x_seq[:sample_args.obs_length], PedsList_seq[:sample_args.obs_length], grid_seq[:sample_args.obs_length]
-                ret_x_seq = sample(obs_traj, obs_PedsList_seq, sample_args, net, x_seq, PedsList_seq, saved_args, dataset_data, dataloader, lookup_seq, numPedsList_seq, sample_args.gru, obs_grid)
-            
-            #revert the points back to original space
-            ret_x_seq = revert_seq(ret_x_seq, PedsList_seq, lookup_seq, first_values_dict)
-            
-            # <--------------------- Experimental inverse block ---------------------->
-            # ret_x_seq = revert_seq(ret_x_seq, PedsList_seq, lookup_seq, target_id_values, first_values_dict)
-            # ret_x_seq = rotate_traj_with_target_ped(ret_x_seq, -angle, PedsList_seq, lookup_seq)
-            # ret_x_seq = translate(ret_x_seq, PedsList_seq, lookup_seq ,-target_id_values)
-            
-            # Record the mean and final displacement error
-            total_error += get_mean_error(ret_x_seq[1:sample_args.obs_length].data, orig_x_seq[1:sample_args.obs_length].data, PedsList_seq[1:sample_args.obs_length], PedsList_seq[1:sample_args.obs_length], sample_args.use_cuda, lookup_seq)
-            final_error += get_final_error(ret_x_seq[1:sample_args.obs_length].data, orig_x_seq[1:sample_args.obs_length].data, PedsList_seq[1:sample_args.obs_length], PedsList_seq[1:sample_args.obs_length], lookup_seq)
-
-            
-            end = time.time()
-
-            print('Current file : ', dataloader.get_file_name(0),' Processed trajectory number : ', batch+1, 'out of', dataloader.num_batches, 'trajectories in time', end - start)
-
-
-
-            if dataset_pointer_ins is not dataloader.dataset_pointer:
-                if dataloader.dataset_pointer != 0:
-                    iteration_submission.append(submission)
-                    iteration_result.append(results)
-
-                dataset_pointer_ins = dataloader.dataset_pointer
-                submission = []
-                results = []
-
-            
-            submission.append(submission_preprocess(dataloader, ret_x_seq.data[sample_args.obs_length:, lookup_seq[target_id], :].numpy(), sample_args.pred_length, sample_args.obs_length, target_id))
-            results.append((x_seq.data.cpu().numpy(), ret_x_seq.data.cpu().numpy(), PedsList_seq, lookup_seq , dataloader.get_frame_sequence(seq_lenght), target_id, sample_args.obs_length))
-
-
-        iteration_submission.append(submission)
-        iteration_result.append(results)
-
-        submission_store.append(iteration_submission)
-        result_store.append(iteration_result)
-
-        if total_error<smallest_err:
-            print("**********************************************************")
-            print('Best iteration has been changed. Previous best iteration: ', smallest_err_iter_num+1, 'Error: ', smallest_err / dataloader.num_batches)
-            print('New best iteration : ', iteration+1, 'Error: ',total_error / dataloader.num_batches)
-            smallest_err_iter_num = iteration
-            smallest_err = total_error
-
-        print('Iteration:' ,iteration+1,' Total training (observed part) mean error of the model is ', total_error / dataloader.num_batches)
-        print('Iteration:' ,iteration+1,'Total training (observed part) final error of the model is ', final_error / dataloader.num_batches)
-        #print(submission)
-
-    print('Smallest error iteration:', smallest_err_iter_num+1)
-    dataloader.write_to_file(submission_store[smallest_err_iter_num], result_directory, prefix, model_name)
-    dataloader.write_to_plot_file(result_store[smallest_err_iter_num], os.path.join(plot_directory, plot_test_file_directory))
-
-
-def sample(x_seq, Pedlist, args, net, true_x_seq, true_Pedlist, saved_args, dimensions, dataloader, look_up, num_pedlist, is_gru, grid = None):
-    '''
-    The sample function
-    params:
-    x_seq: Input positions
-    Pedlist: Peds present in each frame
-    args: arguments
-    net: The model
-    true_x_seq: True positions
-    true_Pedlist: The true peds present in each frame
-    saved_args: Training arguments
-    dimensions: The dimensions of the dataset
-    target_id: ped_id number that try to predict in this sequence
-    '''
-    # Number of peds in the sequence
-    numx_seq = len(look_up)
-
-    with torch.no_grad():
-        # Construct variables for hidden and cell states
-        hidden_states = Variable(torch.zeros(numx_seq, net.args.rnn_size))
-        if args.use_cuda:
-            hidden_states = hidden_states.to(device)
-        if not is_gru:
-            cell_states = Variable(torch.zeros(numx_seq, net.args.rnn_size))
-            if args.use_cuda:
-                cell_states = cell_states.to(device)
-        else:
-            cell_states = None
-
-
-        ret_x_seq = Variable(torch.zeros(args.obs_length+args.pred_length, numx_seq, 2))
-
-        # Initialize the return data structure
-        if args.use_cuda:
-            ret_x_seq = ret_x_seq.to(device)
-
-
-        # For the observed part of the trajectory
-        for tstep in range(args.obs_length-1):
-            if grid is None: #vanilla lstm
-               # Do a forward prop
-                out_obs, hidden_states, cell_states = net(x_seq[tstep].view(1, numx_seq, 2), hidden_states, cell_states, [Pedlist[tstep]], [num_pedlist[tstep]], dataloader, look_up)
-            else:
-                # Do a forward prop
-                out_obs, hidden_states, cell_states = net(x_seq[tstep].view(1, numx_seq, 2), [grid[tstep]], hidden_states, cell_states, [Pedlist[tstep]], [num_pedlist[tstep]], dataloader, look_up)
-            # loss_obs = Gaussian2DLikelihood(out_obs, x_seq[tstep+1].view(1, numx_seq, 2), [Pedlist[tstep+1]])
-
-            # Extract the mean, std and corr of the bivariate Gaussian
-            mux, muy, sx, sy, corr = getCoef(out_obs)
-            # Sample from the bivariate Gaussian
-            next_x, next_y = sample_gaussian_2d(mux.data, muy.data, sx.data, sy.data, corr.data, true_Pedlist[tstep], look_up)
-            ret_x_seq[tstep + 1, :, 0] = next_x
-            ret_x_seq[tstep + 1, :, 1] = next_y
-
-
-        ret_x_seq[:args.obs_length, :, :] = x_seq.clone()
-
-        # Last seen grid
-        if grid is not None: #no vanilla lstm
-            prev_grid = grid[-1].clone()
-
-        #assign last position of observed data to temp
-        #temp_last_observed = ret_x_seq[args.obs_length-1].clone()
-        #ret_x_seq[args.obs_length-1] = x_seq[args.obs_length-1]
-
-        # For the predicted part of the trajectory
-        for tstep in range(args.obs_length-1, args.pred_length + args.obs_length-1):
-            # Do a forward prop
-            if grid is None: #vanilla lstm
-                outputs, hidden_states, cell_states = net(ret_x_seq[tstep].view(1, numx_seq, 2), hidden_states, cell_states, [true_Pedlist[tstep]], [num_pedlist[tstep]], dataloader, look_up)
-            else:
-                outputs, hidden_states, cell_states = net(ret_x_seq[tstep].view(1, numx_seq, 2), [prev_grid], hidden_states, cell_states, [true_Pedlist[tstep]], [num_pedlist[tstep]], dataloader, look_up)
-
-            # Extract the mean, std and corr of the bivariate Gaussian
-            mux, muy, sx, sy, corr = getCoef(outputs)
-            # Sample from the bivariate Gaussian
-            next_x, next_y = sample_gaussian_2d(mux.data, muy.data, sx.data, sy.data, corr.data, true_Pedlist[tstep], look_up)
-
-            # Store the predicted position
-            ret_x_seq[tstep + 1, :, 0] = next_x
-            ret_x_seq[tstep + 1, :, 1] = next_y
-
-            # List of x_seq at the last time-step (assuming they exist until the end)
-            true_Pedlist[tstep+1] = [int(_x_seq) for _x_seq in true_Pedlist[tstep+1]]
-            next_ped_list = true_Pedlist[tstep+1].copy()
-            converted_pedlist = [look_up[_x_seq] for _x_seq in next_ped_list]
-            list_of_x_seq = Variable(torch.LongTensor(converted_pedlist))
-
-            if args.use_cuda:
-                list_of_x_seq = list_of_x_seq.to(device)
-           
-            #Get their predicted positions
-            current_x_seq = torch.index_select(ret_x_seq[tstep+1], 0, list_of_x_seq)
-
-            if grid is not None: #no vanilla lstm
-                # Compute the new grid masks with the predicted positions
-                if args.method == 2: #obstacle lstm
-                    prev_grid = getGridMask(current_x_seq.data.cpu(), dimensions, len(true_Pedlist[tstep+1]),saved_args.neighborhood_size, saved_args.grid_size, True)
-                elif  args.method == 1: #social lstm   
-                    prev_grid = getGridMask(current_x_seq.data.cpu(), dimensions, len(true_Pedlist[tstep+1]),saved_args.neighborhood_size, saved_args.grid_size)
-
-                prev_grid = Variable(torch.from_numpy(prev_grid).float())
-                if args.use_cuda:
-                    prev_grid = prev_grid.to(device)
-
-        #ret_x_seq[args.obs_length-1] = temp_last_observed
-
-        return ret_x_seq
-
-
-def submission_preprocess(dataloader, ret_x_seq, pred_length, obs_length, target_id):
-    seq_lenght = pred_length + obs_length
-
-    #begin and end index of obs. frames in this seq.
-    begin_obs = (dataloader.frame_pointer - seq_lenght)
-    end_obs = (dataloader.frame_pointer - pred_length)
-
-    # get original data for frame number and ped ids
-    observed_data = dataloader.orig_data[dataloader.dataset_pointer][begin_obs:end_obs, :]
-    frame_number_predicted = dataloader.get_frame_sequence(pred_length)
-    ret_x_seq_c = ret_x_seq.copy()
-    ret_x_seq_c[:,[0,1]] = ret_x_seq_c[:,[1,0]] # x, y -> y, x
-    repeated_id = np.repeat(target_id, pred_length) # add id
-    id_integrated_prediction = np.append(repeated_id[:, None], ret_x_seq_c, axis=1)
-    frame_integrated_prediction = np.append(frame_number_predicted[:, None], id_integrated_prediction, axis=1) #add frame number
-    result = np.append(observed_data, frame_integrated_prediction, axis = 0)
-
-    return result
-
+    # 全データセットでの平均エラー
+    if total_sequences > 0:
+        final_ade = total_ade / total_sequences
+        final_fde = total_fde / total_sequences
+        print("\n======================= FINAL RESULTS =======================")
+        print(f"Average ADE across all test datasets: {final_ade:.4f}")
+        print(f"Average FDE across all test datasets: {final_fde:.4f}")
+        print("===========================================================")
 
 if __name__ == '__main__':
     main()
