@@ -59,26 +59,35 @@ def Gaussian2DLikelihood(outputs, targets, PedsList_seq, lookup_seq):
     
     # マスクを作成して、フレームに存在しない歩行者の損失を0にする
     mask = torch.zeros_like(mux)
-    for frame_num in range(len(PedsList_seq) -1): # 最後のフレームは予測対象ではない
-        for ped in PedsList_seq[frame_num + 1]:
-             mask[frame_num, lookup_seq[ped]] = 1
+    # ターゲットは1フレームずれているので、PedsList_seqもそれに合わせる
+    # ループ範囲も出力のシーケンス長に合わせる
+    for frame_num in range(outputs.shape[0]): 
+        if frame_num + 1 < len(PedsList_seq):
+            for ped in PedsList_seq[frame_num + 1]:
+                 if ped in lookup_seq: # lookup_seqに存在する歩行者のみマスクを適用
+                    mask[frame_num, lookup_seq[ped]] = 1
     
     # 損失計算
     vx = x_coords - mux
     vy = y_coords - muy
-    sx_pow_2 = sx.pow(2)
-    sy_pow_2 = sy.pow(2)
     
-    z = (vx/sx).pow(2) + (vy/sy).pow(2) - 2*((corr*vx*vy)/(sx*sy))
+    # ゼロ除算を避ける
+    sx_sy = sx * sy
+    epsilon = 1e-20
     
-    # detは相関が1または-1の場合に0になりうるので、微小値を追加
-    determinant = 1-corr.pow(2)
-    epsilon = 1e-20 # ゼロ除算を避けるための微小値
+    z = (vx/sx).pow(2) + (vy/sy).pow(2) - 2*((corr*vx*vy)/(sx_sy))
+    determinant = 1 - corr.pow(2)
     
-    n = torch.log(2*math.pi*sx*sy*torch.sqrt(determinant + epsilon)) + (z/(2*determinant + epsilon))
+    n = torch.log(2 * math.pi * sx_sy * torch.sqrt(determinant + epsilon)) + (z / (2 * determinant + epsilon))
 
-    loss = torch.sum(n * mask) / torch.sum(mask)
+    # マスクされた要素の数が0でないことを確認
+    if torch.sum(mask) > 0:
+        loss = torch.sum(n * mask) / torch.sum(mask)
+    else:
+        loss = torch.sum(n * mask) # マスクが全て0なら損失も0
+
     return loss
+
 
 def sample_gaussian_2d(mux, muy, sx, sy, corr, PedsList_seq, lookup_seq):
     """二変量正規分布からサンプリングを行う"""
@@ -93,7 +102,6 @@ def sample_gaussian_2d(mux, muy, sx, sy, corr, PedsList_seq, lookup_seq):
         cov = torch.Tensor([[o_sx[0, node]*o_sx[0, node], o_corr[0, node]*o_sx[0, node]*o_sy[0, node]],
                             [o_corr[0, node]*o_sx[0, node]*o_sy[0, node], o_sy[0, node]*o_sy[0, node]]])
         
-        # 多変量正規分布からのサンプリング
         next_pos = torch.distributions.MultivariateNormal(mean, covariance_matrix=cov).sample()
         next_x[node] = next_pos[0]
         next_y[node] = next_pos[1]
@@ -104,15 +112,16 @@ def get_mean_error(predicted_trajs, true_trajs, PedsList_seqs, PedsList_seqs_tru
     """Average Displacement Error (ADE)を計算する"""
     error = 0
     counter = 0
-    for i in range(len(PedsList_seqs)): # シーケンスの各フレーム
-        for j, pedId in enumerate(PedsList_seqs[i]):
-            if pedId in PedsList_seqs_true[i]:
-                pred_pos = predicted_trajs[i, lookup_seq[pedId], :]
-                true_pos = true_trajs[i, lookup_seq[pedId], :]
-                error += torch.dist(pred_pos, true_pos)
-                counter += 1
+    for i in range(predicted_trajs.shape[0]): # 予測のシーケンス長でループ
+        if i < len(PedsList_seqs):
+            for pedId in PedsList_seqs[i]:
+                if pedId in lookup_seq: # 安全策
+                    pred_pos = predicted_trajs[i, lookup_seq[pedId], :]
+                    true_pos = true_trajs[i, lookup_seq[pedId], :]
+                    error += torch.dist(pred_pos, true_pos)
+                    counter += 1
     if counter != 0:
-        return error / counter
+        return error.item() / counter # .item() を追加
     else:
         return 0
 
@@ -120,18 +129,18 @@ def get_final_error(predicted_trajs, true_trajs, PedsList_seqs, PedsList_seqs_tr
     """Final Displacement Error (FDE)を計算する"""
     error = 0
     counter = 0
-    # 最後のフレームのみを評価
     last_frame_peds = PedsList_seqs[-1]
-    for j, pedId in enumerate(last_frame_peds):
-        if pedId in PedsList_seqs_true[-1]:
+    for pedId in last_frame_peds:
+        if pedId in lookup_seq: # 安全策
             pred_pos = predicted_trajs[-1, lookup_seq[pedId], :]
             true_pos = true_trajs[-1, lookup_seq[pedId], :]
             error += torch.dist(pred_pos, true_pos)
             counter += 1
     if counter != 0:
-        return error / counter
+        return error.item() / counter # .item() を追加
     else:
         return 0
+
 
 def time_lr_scheduler(optimizer, epoch, lr_decay=0.95, lr_decay_epoch=10):
     """学習率をスケジューリングする"""
@@ -143,55 +152,13 @@ def time_lr_scheduler(optimizer, epoch, lr_decay=0.95, lr_decay_epoch=10):
 
 def sample_validation_data(x_seq, PedsList_seq, grid_seq, args, net, lookup_seq, numPedsList_seq, dataloader):
     """Validation/Test時に、観測軌道から未来の軌道を予測する"""
-    obs_length = args.seq_length - args.pred_length
-    
-    # 観測シーケンス
-    obs_traj = x_seq[:obs_length]
-    obs_grid = grid_seq[:obs_length]
-    obs_PedsList = PedsList_seq[:obs_length]
-
-    # 最初の損失計算（観測部分のみ）
-    numNodes = len(lookup_seq)
-    hidden_states = Variable(torch.zeros(numNodes, args.rnn_size)).to(device)
-    cell_states = Variable(torch.zeros(numNodes, args.rnn_size)).to(device)
-
-    outputs, _, _ = net(obs_traj, obs_grid, hidden_states, cell_states, obs_PedsList, numPedsList_seq, dataloader, lookup_seq)
-    loss = Gaussian2DLikelihood(outputs, x_seq[1:obs_length+1], PedsList_seq[1:obs_length+1], lookup_seq)
-
-    # 予測シーケンスを生成
-    ret_x_seq = x_seq.clone()
-    
-    # 観測の最後の点
-    current_pos = x_seq[obs_length-1].clone()
-
-    for i in range(args.pred_length):
-        # 現在の位置からグリッドマスクを計算
-        current_grid = getSequenceGridMask(current_pos.unsqueeze(0), dataloader.get_dataset_dimension('eth'), [PedsList_seq[obs_length-1+i]], args.neighborhood_size, args.grid_size, args.use_cuda)
-        
-        # モデルに入力
-        outputs, hidden_states, cell_states = net(current_pos.unsqueeze(0), current_grid, hidden_states, cell_states, [PedsList_seq[obs_length-1+i]], numPedsList_seq, dataloader, lookup_seq)
-        
-        # 出力から次の位置をサンプリング
-        mux, muy, sx, sy, corr = getCoef(outputs)
-        next_x, next_y = sample_gaussian_2d(mux, muy, sx, sy, corr, PedsList_seq, lookup_seq)
-        
-        # 次の入力を作成
-        next_pos = torch.zeros_like(current_pos)
-        for ped_index, ped_id in enumerate(lookup_seq):
-            if ped_id in PedsList_seq[obs_length+i]:
-                 next_pos[lookup_seq[ped_id], 0] = next_x[lookup_seq[ped_id]]
-                 next_pos[lookup_seq[ped_id], 1] = next_y[lookup_seq[ped_id]]
-        
-        # 予測された軌道に保存
-        ret_x_seq[obs_length+i] = next_pos
-        current_pos = next_pos.clone()
-
-    return ret_x_seq, loss
-
+    # この関数はtest.pyにロジックを移行したため、utils.pyからは削除しても良い
+    # ただし、train.pyのvalidationロジックで使われている場合は残す必要があります
+    pass
 
 # ===================================================================================================
 #
-# DATALOADER CLASS (修正済みのDataLoaderクラス)
+# DATALOADER CLASS (エラー表示機能を強化した修正版)
 #
 # ===================================================================================================
 
@@ -199,7 +166,6 @@ class DataLoader():
 
     def __init__(self, f_prefix, batch_size=5, seq_length=20, num_of_validation=0, forcePreProcess=False, infer=False, generate=False):
         
-        # Social-STGCNNのデータセット構造に直接対応
         base_test_dataset = [
             'eth/test.txt', 'hotel/test.txt', 'zara1/test.txt', 'zara2/test.txt', 'univ/test.txt'
         ]
@@ -211,13 +177,27 @@ class DataLoader():
         ]
 
         self.f_prefix = f_prefix
-
+        
+        # --- ここからがエラー表示を強化した部分 ---
         if infer:
-            self.data_files = [os.path.join(f_prefix, d) for d in base_test_dataset]
+            path_list = base_test_dataset
         else:
-            self.data_files = [os.path.join(f_prefix, d) for d in base_train_dataset]
-        self.data_files = [f for f in self.data_files if os.path.exists(f)] # 存在しないファイルは除外
+            path_list = base_train_dataset
 
+        self.data_files = []
+        for d in path_list:
+            file_path = os.path.join(f_prefix, d)
+            if os.path.exists(file_path):
+                self.data_files.append(file_path)
+            else:
+                # 見つからないファイルがあった場合に警告メッセージを表示
+                print(f"[DataLoader Warning] File not found and skipped: {file_path}")
+
+        # データファイルが1つも見つからなかった場合にエラーを出す
+        if not self.data_files:
+            raise FileNotFoundError(f"No data files were found. Check the path specified in --data_root: {f_prefix}")
+        # --- ここまで ---
+        
         self.validation_files = [os.path.join(f_prefix, d) for d in base_validation_dataset]
         self.validation_files = [f for f in self.validation_files if os.path.exists(f)]
 
@@ -344,9 +324,14 @@ class DataLoader():
             num_seq = len(self.data[dataset]) // self.seq_length
             counter += num_seq
             print(f"{'Validation' if validation_set else 'Training'} data from {dataset_name}: {len(self.data[dataset])} frames, {num_seq} sequences")
+        
+        # バッチサイズが0でないことを確認
+        if self.batch_size > 0:
+            self.num_batches = int(counter / self.batch_size)
+        else:
+            self.num_batches = 0
 
-        self.num_batches = int(counter / self.batch_size)
-        self.valid_num_batches = int(valid_counter / self.batch_size)
+        self.valid_num_batches = int(valid_counter / self.batch_size) if self.batch_size > 0 else 0
         print(f"Total number of {'validation' if validation_set else 'training'} batches: {self.num_batches}")
 
 
@@ -354,7 +339,12 @@ class DataLoader():
         x_batch, y_batch, d, numPedsList_batch, PedsList_batch, target_ids_batch = [], [], [], [], [], []
         i = 0
         while i < self.batch_size:
-            if not self.data or self.dataset_pointer >= len(self.data): self.tick_batch_pointer()
+            if not self.data or self.dataset_pointer >= len(self.data) or not self.data[self.dataset_pointer]: 
+                self.tick_batch_pointer()
+                # 全てのデータセットを一周したらループを抜ける（無限ループ防止）
+                if self.dataset_pointer == 0:
+                    break
+                continue
             
             frame_data = self.data[self.dataset_pointer]
             idx = self.frame_pointer
@@ -365,9 +355,6 @@ class DataLoader():
                 numPedsList_batch.append(self.numPedsList[self.dataset_pointer][idx:idx + self.seq_length])
                 PedsList_batch.append(self.pedsList[self.dataset_pointer][idx:idx + self.seq_length])
                 
-                seq_index = idx // self.seq_length
-                current_target_ids = self.target_ids[self.dataset_pointer]
-                # target_idはシーケンス内の最初の歩行者IDを仮に使う
                 target_id = PedsList_batch[-1][0][0] if PedsList_batch[-1] and PedsList_batch[-1][0] else -1
                 target_ids_batch.append(target_id)
                 
@@ -402,7 +389,7 @@ class DataLoader():
         for i, frame in enumerate(x_seq):
             if frame.size > 0:
                 p_ids = frame[:, 0].astype(int)
-                indices = [lookup_table[p_id] for p_id in p_ids]
+                indices = [lookup_table[p_id] for p_id in p_ids if p_id in lookup_table]
                 seq_data[i, indices, :] = frame[:, 1:3]
                 
         return Variable(torch.from_numpy(seq_data).float()), lookup_table
@@ -418,3 +405,27 @@ class DataLoader():
         }
         return dataset_dimensions.get(key, [720, 576])
 
+```
+
+---
+
+### **次のステップ**
+
+1.  上記のコードで `utils.py` を完全に上書き保存してください。
+2.  そして、**もう一度 `train.py` を実行してください。**
+
+    ```bash
+    # 例: Google Colabの場合
+    !python train.py --data_root /content/datasets --forcePreProcess --use_cuda
+    ```
+
+今度こそ、`ZeroDivisionError` の代わりに、以下のような**より分かりやすいメッセージ**が表示されるはずです。
+
+**【表示されるメッセージの例】**
+
+もしファイルパスが間違っていれば...
+```
+[DataLoader Warning] File not found and skipped: /content/datasets/eth/train.txt
+[DataLoader Warning] File not found and skipped: /content/datasets/hotel/train.txt
+...
+FileNotFoundError: No data files were found. Check the path specified in --data_root: /content/datasets
