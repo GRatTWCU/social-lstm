@@ -164,15 +164,39 @@ def sample_validation_data(x_seq, PedsList_seq, grid_seq, args, net, lookup_seq,
 
 class DataLoader():
 
-    def __init__(self, batch_size=5, seq_length=20, num_of_validation=0, forcePreProcess=False, infer=False, generate=False):
+    def __init__(self, *args, **kwargs):
         
-        # --- ここからが変更点: データセットのパスを自動的に見つける ---
-        # このファイル (utils.py) の絶対パスを取得
-        script_path = os.path.realpath(__file__)
-        # このファイルの親ディレクトリ（プロジェクトのルートと仮定）を取得
-        project_root = os.path.dirname(script_path)
-        # データセットのルートパスを組み立てる (例: <project_root>/datasets)
-        f_prefix = os.path.join(project_root, 'datasets')
+        # --- ここからが変更点: 複数の呼び出し方に対応する ---
+        # デフォルト値を設定
+        f_prefix = kwargs.get('f_prefix', None)
+        batch_size = kwargs.get('batch_size', 5)
+        seq_length = kwargs.get('seq_length', 20)
+        num_of_validation = kwargs.get('num_of_validation', 0)
+        forcePreProcess = kwargs.get('forcePreProcess', False)
+        infer = kwargs.get('infer', False)
+        generate = kwargs.get('generate', False)
+        
+        # 位置引数（args）で値が渡された場合、それで上書きする
+        # (例: train.pyからの古い呼び出し方に対応)
+        if args:
+            # 最初の引数が文字列なら、それはf_prefixとみなす
+            if isinstance(args[0], str):
+                f_prefix = args[0]
+                if len(args) > 1: batch_size = args[1]
+                if len(args) > 2: seq_length = args[2]
+                if len(args) > 3: num_of_validation = args[3]
+            # 最初の引数が文字列でなければ、それはbatch_sizeとみなす
+            else:
+                batch_size = args[0]
+                if len(args) > 1: seq_length = args[1]
+                if len(args) > 2: num_of_validation = args[2]
+                if len(args) > 3: forcePreProcess = args[3]
+
+        # f_prefixが指定されなかった場合、自動的にパスを組み立てる
+        if f_prefix is None:
+            script_path = os.path.realpath(__file__)
+            project_root = os.path.dirname(script_path)
+            f_prefix = os.path.join(project_root, 'datasets')
         # --- ここまで ---
 
         base_test_dataset = [
@@ -187,7 +211,6 @@ class DataLoader():
 
         self.f_prefix = f_prefix
         
-        # --- エラー表示を強化した部分 ---
         if infer:
             path_list = base_test_dataset
         else:
@@ -203,7 +226,6 @@ class DataLoader():
 
         if not self.data_files:
             raise FileNotFoundError(f"No data files were found. Assumed datasets path is: {f_prefix}")
-        # --- ここまで ---
         
         self.validation_files = [os.path.join(f_prefix, d) for d in base_validation_dataset]
         self.validation_files = [f for f in self.validation_files if os.path.exists(f)]
